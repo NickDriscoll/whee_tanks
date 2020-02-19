@@ -4,11 +4,14 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use glfw::{Context, WindowEvent, WindowMode};
 use gl::types::*;
 use ozy_engine::{glutil, init, routines};
+use crate::structs::*;
+
+mod structs;
 
 fn main() {
 	let window_size = (1920, 1080);
 	let aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
-	let (mut glfw, mut window, events) = init::glfw_window(window_size, WindowMode::Windowed, 3, 3, "Whee Tanks");
+	let (mut glfw, mut window, events) = init::glfw_window(window_size, WindowMode::Windowed, 3, 3, "Whee! Tanks!");
 
 	//Make the window non-resizable
 	window.set_resizable(false);
@@ -35,16 +38,18 @@ fn main() {
 	//Compile shader
 	let mapped_shader = unsafe { glutil::compile_program_from_files("shaders/mapped_vertex.glsl", "shaders/mapped_fragment.glsl") };
 
+	let mut arena_pieces = Vec::with_capacity(5);
+
 	//Define the floor plane
 	let arena_ratio = 16.0 / 9.0;
-	let (floor_vao, floor_texture, floor_matrix, floor_count) = unsafe {
+	unsafe {
 		let tex_scale = 2.0;
 		let vertices = [
 			//Positions				Texture coordinates
 			-0.5, 0.0, -0.5,		0.0, 0.0,
-			0.5, 0.0, -0.5,			tex_scale, 0.0,
+			0.5, 0.0, -0.5,			tex_scale*arena_ratio, 0.0,
 			-0.5, 0.0, 0.5,			0.0, tex_scale,
-			0.5, 0.0, 0.5,			tex_scale, tex_scale
+			0.5, 0.0, 0.5,			tex_scale*arena_ratio, tex_scale
 		];
 		let indices = [
 			0u16, 1, 2,
@@ -56,18 +61,18 @@ fn main() {
 			(gl::TEXTURE_MIN_FILTER, gl::LINEAR),
 			(gl::TEXTURE_MAG_FILTER, gl::LINEAR)
 		];
-		let matrix = glm::scaling(&glm::vec3(9.0*arena_ratio, 10.0, 10.0));
 
-		(
-			glutil::create_vertex_array_object(&vertices, &indices, &[3, 2]),
-			glutil::load_texture("textures/wood_veneer/albedo.png", &tex_params),
-			matrix,
-			indices.len() as GLsizei
-		)
+		let piece = StaticGeometry {
+			vao: glutil::create_vertex_array_object(&vertices, &indices, &[3, 2]),
+			texture: glutil::load_texture("textures/bamboo_wood_semigloss/albedo.png", &tex_params),
+			model_matrix: glm::scaling(&glm::vec3(9.0*arena_ratio, 10.0, 10.0)),
+			index_count: indices.len() as GLsizei
+		};
+		arena_pieces.push(piece);
 	};
 
-	//Define upper wall
-	let (wall_vao, wall_texture, mut wall_matrix, wall_count) = unsafe {
+	//Define walls
+	unsafe {
 		let vertices = [
 			//Positions				Texture Coordinates
 			-0.5, -0.5, -0.5,		0.0, 0.0,
@@ -105,16 +110,26 @@ fn main() {
 			7, 2, 3
 		];
 		let vao = glutil::create_vertex_array_object(&vertices, &indices, &[3, 2]);
-
+		
 		let tex_params = [
 			(gl::TEXTURE_WRAP_S, gl::REPEAT),
 			(gl::TEXTURE_WRAP_T, gl::REPEAT),
 			(gl::TEXTURE_MIN_FILTER, gl::LINEAR),
 			(gl::TEXTURE_MAG_FILTER, gl::LINEAR)
-		];
-		let albedo = glutil::load_texture("textures/steel_plate/albedo.png", &tex_params);
-		let matrix = glm::translation(&glm::vec3(0.0, 0.5, 5.5)) * glm::scaling(&glm::vec3(9.0*arena_ratio, 1.0, 1.0));
-		(vao, albedo, matrix, indices.len() as GLsizei)
+		];		
+		let texture = glutil::load_texture("textures/steel_plate/albedo.png", &tex_params);
+
+		let positions = [glm::vec3(0.0, 0.5, 5.5), glm::vec3(0.0, 0.5, -5.5), glm::vec3(9.0*arena_ratio/2.0+0.5, 0.5, 0.0), glm::vec3(-(9.0*arena_ratio/2.0+0.5), 0.5, 0.0)];
+		let scales = [glm::vec3(9.0*arena_ratio, 1.0, 1.0), glm::vec3(9.0*arena_ratio, 1.0, 1.0), glm::vec3(1.0, 1.0, 12.0), glm::vec3(1.0, 1.0, 12.0)];
+		for i in 0..positions.len() {
+			let piece = StaticGeometry {
+				vao,
+				texture,
+				model_matrix: glm::translation(&positions[i]) * glm::scaling(&scales[i]),
+				index_count: indices.len() as GLsizei
+			};
+			arena_pieces.push(piece);
+		}
 	};
 
 	//The view-projection matrix is constant
@@ -157,21 +172,15 @@ fn main() {
 			//Bind the GLSL program
 			gl::UseProgram(mapped_shader);
 
-			//Render floor plane
-			glutil::bind_matrix4(mapped_shader, "mvp", &(projection_matrix * view_matrix * floor_matrix));
-			glutil::bind_matrix4(mapped_shader, "model_matrix", &floor_matrix);
-			gl::ActiveTexture(gl::TEXTURE0);
-			gl::BindTexture(gl::TEXTURE_2D, floor_texture);
-			gl::BindVertexArray(floor_vao);
-			gl::DrawElements(gl::TRIANGLES, floor_count, gl::UNSIGNED_SHORT, ptr::null());
-
-			//Render upper wall
-			glutil::bind_matrix4(mapped_shader, "mvp", &(projection_matrix * view_matrix * wall_matrix));
-			glutil::bind_matrix4(mapped_shader, "model_matrix", &wall_matrix);
-			gl::ActiveTexture(gl::TEXTURE0);
-			gl::BindTexture(gl::TEXTURE_2D, wall_texture);
-			gl::BindVertexArray(wall_vao);
-			gl::DrawElements(gl::TRIANGLES, wall_count, gl::UNSIGNED_SHORT, ptr::null());
+			//Render static pieces of the arena
+			for piece in arena_pieces.iter() {
+				glutil::bind_matrix4(mapped_shader, "mvp", &(projection_matrix * view_matrix * piece.model_matrix));
+				glutil::bind_matrix4(mapped_shader, "model_matrix", &piece.model_matrix);
+				gl::ActiveTexture(gl::TEXTURE0);
+				gl::BindTexture(gl::TEXTURE_2D, piece.texture);
+				gl::BindVertexArray(piece.vao);
+				gl::DrawElements(gl::TRIANGLES, piece.index_count, gl::UNSIGNED_SHORT, ptr::null());
+			}
 		}
 
 		window.render_context().swap_buffers();

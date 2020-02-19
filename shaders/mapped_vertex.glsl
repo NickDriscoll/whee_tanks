@@ -2,7 +2,6 @@
 
 in vec3 position;
 in vec2 uv;
-out vec4 f_normal;
 out vec2 f_uvs;
 
 uniform mat4 mvp;
