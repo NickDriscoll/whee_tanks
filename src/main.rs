@@ -176,7 +176,7 @@ fn main() {
         }
 		
 		//-----------Simulating-----------
-		tank_skeleton_nodes[0].transform = glm::translation(&glm::vec3(0.0, 1.0 + 0.05*elapsed_time, 0.0))
+		tank_skeleton_nodes[0].transform = glm::translation(&glm::vec3(0.0, 1.0, 0.0))
 										 * glm::rotation(elapsed_time, &glm::vec3(0.0, 1.0, 0.0));
 
 		//-----------Rendering-----------
