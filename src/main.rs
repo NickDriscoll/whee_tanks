@@ -48,6 +48,10 @@ fn main() {
 		(gl::TEXTURE_MAG_FILTER, gl::LINEAR)
 	];
 
+	let steel_plate_albedo = unsafe { glutil::load_texture("textures/steel_plate/albedo.png", &default_tex_params) };
+	let wood_veneer_albedo = unsafe { glutil::load_texture("textures/wood_veneer/albedo.png", &default_tex_params) };
+	let hex_stones_albedo = unsafe { glutil::load_texture("textures/hex-stones1-bl/hex-stones1-albedo.png", &default_tex_params) };
+
 	let mut arena_pieces = Vec::new();
 
 	//Define the floor plane
@@ -90,12 +94,8 @@ fn main() {
 	
 	let mut rendered_tank_piece = 0;
 
-	let steel_plate_albedo = unsafe { glutil::load_texture("textures/steel_plate/albedo.png", &default_tex_params) };
-	let wood_veneer_albedo = unsafe { glutil::load_texture("textures/wood_veneer/albedo.png", &default_tex_params) };
-	let hex_stones_albedo = unsafe { glutil::load_texture("textures/hex-stones1-bl/hex-stones1-albedo.png", &default_tex_params) };
-
 	//Load the tank model
-	let tank_skeleton = match routines::load_ozymesh("models/cube.ozy") {
+	let tank_skeleton = match routines::load_ozymesh("models/tank.ozy") {
 		Some(meshdata) => {
 			let steel_plates = ["Turret", "Barrel"];
 			let wood_names = ["Hull"];
@@ -115,7 +115,6 @@ fn main() {
 			}
 
 			let vao = unsafe { glutil::create_vertex_array_object(&meshdata.vertex_array.vertices, &meshdata.vertex_array.indices, &meshdata.vertex_array.attribute_offsets) };
-
 			Skeleton {
 				vao,
 				nodes,
@@ -177,7 +176,8 @@ fn main() {
         }
 		
 		//-----------Simulating-----------
-		tank_skeleton_nodes[0].transform = glm::rotation(elapsed_time, &glm::vec3(0.0, 1.0, 0.0)) * glm::translation(&glm::vec3(0.0, f32::sin(elapsed_time)*0.5+1.0, 0.0));
+		tank_skeleton_nodes[0].transform = glm::translation(&glm::vec3(0.0, 1.0 + 0.05*elapsed_time, 0.0))
+										 * glm::rotation(elapsed_time, &glm::vec3(0.0, 1.0, 0.0));
 
 		//-----------Rendering-----------
 		unsafe {
@@ -214,14 +214,7 @@ fn main() {
 				gl::DrawElements(gl::TRIANGLES, piece.index_count, gl::UNSIGNED_SHORT, ptr::null());
 			}
 
-			gl::BindVertexArray(tank_skeleton.vao);
-			gl::ActiveTexture(gl::TEXTURE0);
-			gl::BindTexture(gl::TEXTURE_2D, hex_stones_albedo);
-			glutil::bind_matrix4(mapped_shader, "mvp", &(projection_matrix * view_matrix * tank_skeleton_nodes[0].transform));
-			gl::DrawElements(gl::TRIANGLES, tank_skeleton.geo_boundaries[1] - tank_skeleton.geo_boundaries[0], gl::UNSIGNED_SHORT, ptr::null());
-
 			//Render the tank
-			/*
 			gl::BindVertexArray(tank_skeleton.vao);
 			for i in 0..tank_skeleton.nodes.len() {
 				gl::ActiveTexture(gl::TEXTURE0);
@@ -231,13 +224,6 @@ fn main() {
 
 				gl::DrawElements(gl::TRIANGLES, tank_skeleton.geo_boundaries[i + 1] - tank_skeleton.geo_boundaries[i], gl::UNSIGNED_SHORT, (mem::size_of::<u16>() as i32 * tank_skeleton.geo_boundaries[i]) as *const c_void);
 			}
-			gl::ActiveTexture(gl::TEXTURE0);
-			gl::BindTexture(gl::TEXTURE_2D, tank_skeleton.albedo_maps[rendered_tank_piece]);
-
-			glutil::bind_matrix4(mapped_shader, "mvp", &(projection_matrix * view_matrix * tank_skeleton_nodes[0].transform));
-
-			gl::DrawElements(gl::TRIANGLES, tank_skeleton.geo_boundaries[rendered_tank_piece + 1] - tank_skeleton.geo_boundaries[rendered_tank_piece], gl::UNSIGNED_SHORT, (mem::size_of::<u16>() as i32 * tank_skeleton.geo_boundaries[rendered_tank_piece]) as *const c_void);
-			*/
 		}
 
 		window.render_context().swap_buffers();

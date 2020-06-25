@@ -1,5 +1,4 @@
 use gl::types::*;
-use ozy_engine::structs::*;
 
 pub struct StaticGeometry {
     pub vao: GLuint,
