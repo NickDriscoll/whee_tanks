@@ -97,7 +97,7 @@ fn main() {
 	//Load the tank model
 	let tank_skeleton = match routines::load_ozymesh("models/tank.ozy") {
 		Some(meshdata) => {
-			let steel_plates = ["Turret", "Barrel"];
+			let steel_plates = ["Turret", "Turret.001"];
 			let wood_names = ["Hull"];
 			let mut nodes = Vec::with_capacity(meshdata.names.len());
 			let mut albedo_maps = Vec::with_capacity(meshdata.names.len());
@@ -222,7 +222,7 @@ fn main() {
 
 				glutil::bind_matrix4(mapped_shader, "mvp", &(projection_matrix * view_matrix * tank_skeleton_nodes[0].transform));
 
-				gl::DrawElements(gl::TRIANGLES, tank_skeleton.geo_boundaries[i + 1] - tank_skeleton.geo_boundaries[i], gl::UNSIGNED_SHORT, (mem::size_of::<u16>() as i32 * tank_skeleton.geo_boundaries[i]) as *const c_void);
+				gl::DrawElements(gl::TRIANGLES, (tank_skeleton.geo_boundaries[i + 1] - tank_skeleton.geo_boundaries[i]) as i32, gl::UNSIGNED_SHORT, (mem::size_of::<u16>() * tank_skeleton.geo_boundaries[i] as usize) as *const c_void);
 			}
 		}
 

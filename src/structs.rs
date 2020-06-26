@@ -12,7 +12,7 @@ pub struct StaticGeometry {
 pub struct Skeleton {
 	pub vao: GLuint,
 	pub nodes: Vec<usize>,
-	pub geo_boundaries: Vec<GLsizei>,			//[0, a, b, c, ..., indices.length - 1]
+	pub geo_boundaries: Vec<u16>,			//[0, a, b, c, ..., indices.length - 1]
 	pub albedo_maps: Vec<GLuint>
 }
 
