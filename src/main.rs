@@ -1,5 +1,6 @@
 extern crate nalgebra_glm as glm;
 use std::{mem, ptr};
+use std::collections::HashMap;
 use std::os::raw::c_void;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use glfw::{Action, Context, Key, WindowEvent, WindowMode};
@@ -17,7 +18,7 @@ fn main() {
 	//Make the window non-resizable
 	window.set_resizable(false);
 
-	//Configure what kinds of events GLFW will listen for
+	//Configure which window events GLFW will listen for
 	window.set_key_polling(true);
 	window.set_framebuffer_size_polling(true);
 	window.set_mouse_button_polling(true);
@@ -30,8 +31,8 @@ fn main() {
 	//OpenGL configuration
 	unsafe {
 		gl::Enable(gl::DEPTH_TEST);										//Enable depth testing
-		gl::CullFace(gl::BACK);
-		gl::Enable(gl::CULL_FACE);
+		gl::CullFace(gl::BACK);											//Cull backfaces
+		gl::Enable(gl::CULL_FACE);										//Enable said backface culling
 		gl::DepthFunc(gl::LEQUAL);										//Pass the fragment with the smallest z-value. Needs to be <= instead of < because for all skybox pixels z = 1.0
 		gl::Enable(gl::FRAMEBUFFER_SRGB); 								//Enable automatic linear->SRGB space conversion
 		gl::Enable(gl::BLEND);											//Enable alpha blending
@@ -48,9 +49,7 @@ fn main() {
 		(gl::TEXTURE_MAG_FILTER, gl::LINEAR)
 	];
 
-	let steel_plate_albedo = unsafe { glutil::load_texture("textures/steel_plate/albedo.png", &default_tex_params) };
-	let wood_veneer_albedo = unsafe { glutil::load_texture("textures/wood_veneer/albedo.png", &default_tex_params) };
-	let hex_stones_albedo = unsafe { glutil::load_texture("textures/hex-stones1-bl/hex-stones1-albedo.png", &default_tex_params) };
+	let mut texture_keeper = HashMap::new();
 
 	let mut arena_pieces = Vec::new();
 
@@ -79,45 +78,50 @@ fn main() {
 		};
 		arena_pieces.push(piece);
 	};
-	
-	//Set up the tanks' skeleton
-	let mut tank_skeleton_nodes = vec![
-		SkeletonNode {
-			transform: glm::identity(),
-			parent: None
-		},
-		SkeletonNode {
-			transform: glm::identity(),
-			parent: Some(0)
-		}
-	];
-	
-	let mut rendered_tank_piece = 0;
 
 	//Load the tank model
-	let tank_skeleton = match routines::load_ozymesh("models/tank.ozy") {
+	let mut tank_skeleton = match routines::load_ozymesh("models/tank.ozy") {
 		Some(meshdata) => {
-			let steel_plates = ["Turret", "Turret.001"];
-			let wood_names = ["Hull"];
-			let mut nodes = Vec::with_capacity(meshdata.names.len());
+			let mut node_list = Vec::with_capacity(meshdata.names.len());
 			let mut albedo_maps = Vec::with_capacity(meshdata.names.len());
-			for i in 0..meshdata.names.len() {
-				if steel_plates.contains(&(meshdata.names[i].as_str())) {
-					nodes.push(1);
-					albedo_maps.push(steel_plate_albedo);
-				} else if wood_names.contains(&(meshdata.names[i].as_str())) {
-					nodes.push(0);
-					albedo_maps.push(wood_veneer_albedo);
-				} else {
-					nodes.push(0);
-					albedo_maps.push(hex_stones_albedo);
+			let mut node_data = Vec::new();
+
+			//Load associated textures
+			for name in meshdata.texture_names.iter() {
+				match texture_keeper.get(name) {
+					Some(id) => {
+						albedo_maps.push(*id);
+					}
+					None => {
+						let tex = unsafe { glutil::load_texture(&format!("textures/{}/albedo.png", name), &default_tex_params) };
+						texture_keeper.insert(name, tex);
+						albedo_maps.push(tex);
+					}
 				}
+			}
+
+			//Load node info
+			for i in 0..meshdata.node_ids.len() {
+				let parent = if meshdata.parent_ids[i] == 0 {
+					None
+				} else {
+					Some(meshdata.parent_ids[i] as usize - 1)
+				};
+
+				if !node_list.contains(&(meshdata.node_ids[i] as usize - 1)) {
+					node_data.push(SkeletonNode {
+						transform: glm::identity(),
+						parent
+					});
+				}
+				node_list.push(meshdata.node_ids[i] as usize - 1);
 			}
 
 			let vao = unsafe { glutil::create_vertex_array_object(&meshdata.vertex_array.vertices, &meshdata.vertex_array.indices, &meshdata.vertex_array.attribute_offsets) };
 			Skeleton {
 				vao,
-				nodes,
+				node_data,
+				node_list,
 				geo_boundaries: meshdata.geo_boundaries,
 				albedo_maps
 			}
@@ -159,11 +163,11 @@ fn main() {
 				WindowEvent::Close => { window.set_should_close(true); }
 				WindowEvent::Key(key, _, Action::Press, ..) => {
 					match key {
+						Key::Escape => {
+							window.set_should_close(true);
+						}
 						Key::Q => {
 							is_wireframe = !is_wireframe;
-						}
-						Key::Space => {
-							rendered_tank_piece = (rendered_tank_piece + 1) % 5;
 						}
 						_ => {}
 					}
@@ -176,8 +180,9 @@ fn main() {
         }
 		
 		//-----------Simulating-----------
-		tank_skeleton_nodes[0].transform = glm::translation(&glm::vec3(0.0, 1.0, 0.0))
-										 * glm::rotation(elapsed_time, &glm::vec3(0.0, 1.0, 0.0));
+		tank_skeleton.node_data[0].transform = glm::translation(&glm::vec3(f32::cos(elapsed_time)*3.0, 1.0, f32::sin(elapsed_time)*3.0))
+										 * glm::rotation(-elapsed_time, &glm::vec3(0.0, 1.0, 0.0));
+		tank_skeleton.node_data[1].transform = glm::rotation(elapsed_time*1.5, &glm::vec3(0.0, 1.0, 0.0));
 
 		//-----------Rendering-----------
 		unsafe {
@@ -216,11 +221,23 @@ fn main() {
 
 			//Render the tank
 			gl::BindVertexArray(tank_skeleton.vao);
-			for i in 0..tank_skeleton.nodes.len() {
+			for i in 0..tank_skeleton.node_list.len() {
 				gl::ActiveTexture(gl::TEXTURE0);
 				gl::BindTexture(gl::TEXTURE_2D, tank_skeleton.albedo_maps[i]);
 
-				glutil::bind_matrix4(mapped_shader, "mvp", &(projection_matrix * view_matrix * tank_skeleton_nodes[0].transform));
+				let mut model_matrix = glm::identity();
+				let mut current_node = tank_skeleton.node_list[i];
+				while let Some(id) = tank_skeleton.node_data[current_node].parent {
+					model_matrix = tank_skeleton.node_data[current_node].transform * model_matrix;
+					current_node = id;
+				}
+				//println!("\n\n\n\nid: {}", i);
+				//println!("{}", model_matrix);
+				model_matrix = tank_skeleton.node_data[current_node].transform * model_matrix;
+				
+				//println!("{}", model_matrix);
+
+				glutil::bind_matrix4(mapped_shader, "mvp", &(projection_matrix * view_matrix * model_matrix));
 
 				gl::DrawElements(gl::TRIANGLES, (tank_skeleton.geo_boundaries[i + 1] - tank_skeleton.geo_boundaries[i]) as i32, gl::UNSIGNED_SHORT, (mem::size_of::<u16>() * tank_skeleton.geo_boundaries[i] as usize) as *const c_void);
 			}
