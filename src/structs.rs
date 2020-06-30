@@ -23,3 +23,25 @@ pub struct SkeletonNode {
     pub transform: glm::TMat4<f32>,
     pub parent: Option<usize>
 }
+
+pub struct Tank {
+    pub position: glm::TVec3<f32>,
+    pub speed: f32,
+    pub forward: glm::TVec3<f32>,
+    pub move_state: TankMoving,
+    pub rotation_state: TankRotating,
+    pub turret_forward: glm::TVec3<f32>,
+    pub skeleton: Skeleton
+}
+
+pub enum TankMoving {
+    Forwards,
+    Backwards,
+    Not
+}
+
+pub enum TankRotating {
+    Left,
+    Right,
+    Not
+}

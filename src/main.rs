@@ -79,8 +79,8 @@ fn main() {
 		arena_pieces.push(piece);
 	};
 
-	//Load the tank model
-	let mut tank_skeleton = match routines::load_ozymesh("models/tank.ozy") {
+	//Load the tank's graphics
+	let mut tank = match routines::load_ozymesh("models/tank.ozy") {
 		Some(meshdata) => {
 			let mut node_list = Vec::with_capacity(meshdata.names.len());
 			let mut albedo_maps = Vec::with_capacity(meshdata.names.len());
@@ -88,13 +88,14 @@ fn main() {
 
 			//Load associated textures
 			for name in meshdata.texture_names.iter() {
-				match texture_keeper.get(name) {
+				let path = format!("textures/{}/albedo.png", name);
+				match texture_keeper.get(&path) {
 					Some(id) => {
 						albedo_maps.push(*id);
 					}
 					None => {
-						let tex = unsafe { glutil::load_texture(&format!("textures/{}/albedo.png", name), &default_tex_params) };
-						texture_keeper.insert(name, tex);
+						let tex = unsafe { glutil::load_texture(&path, &default_tex_params) };
+						texture_keeper.insert(path, tex);
 						albedo_maps.push(tex);
 					}
 				}
@@ -117,13 +118,29 @@ fn main() {
 				node_list.push(meshdata.node_ids[i] as usize - 1);
 			}
 
+			//Create the vertex array object
 			let vao = unsafe { glutil::create_vertex_array_object(&meshdata.vertex_array.vertices, &meshdata.vertex_array.indices, &meshdata.vertex_array.attribute_offsets) };
-			Skeleton {
+			let skeleton = Skeleton {
 				vao,
 				node_data,
 				node_list,
 				geo_boundaries: meshdata.geo_boundaries,
 				albedo_maps
+			};
+
+			//Load the tank's gameplay data
+			let mut turret_forward = glm::vec3(0.0, 0.0, 1.0);
+			let mut tank_forward = glm::vec3(0.0, 0.0, 1.0);
+			let mut tank_position = glm::vec3(0.0, 0.0, 0.0);
+			let mut tank_speed = 2.5;
+			Tank {
+				position: tank_position,
+				speed: tank_speed,
+				forward: tank_forward,
+				move_state: TankMoving::Not,
+				rotation_state: TankRotating::Not,
+				turret_forward,
+				skeleton
 			}
 		}
 		None => {
@@ -169,6 +186,35 @@ fn main() {
 						Key::Q => {
 							is_wireframe = !is_wireframe;
 						}
+						Key::W => {
+							tank.move_state = TankMoving::Forwards
+						}
+						Key::S => {
+							tank.move_state = TankMoving::Backwards
+						}
+						Key::A => {
+							tank.rotation_state = TankRotating::Left;
+						}
+						Key::D => {
+							tank.rotation_state = TankRotating::Right;
+						}
+						Key::Left => {
+							
+						}
+						Key::Right => {
+
+						}
+						_ => {}
+					}
+				}
+				WindowEvent::Key(key, _, Action::Release, ..) => {
+					match key {
+						Key::W | Key::S => {
+							tank.move_state = TankMoving::Not;
+						}
+						Key::A | Key::D => {
+							tank.rotation_state = TankRotating::Not;
+						}
 						_ => {}
 					}
 				}
@@ -180,9 +226,41 @@ fn main() {
         }
 		
 		//-----------Simulating-----------
-		tank_skeleton.node_data[0].transform = glm::translation(&glm::vec3(f32::cos(elapsed_time)*3.0, 1.0, f32::sin(elapsed_time)*3.0))
-										 * glm::rotation(-elapsed_time, &glm::vec3(0.0, 1.0, 0.0));
-		tank_skeleton.node_data[1].transform = glm::rotation(elapsed_time*1.5, &glm::vec3(0.0, 1.0, 0.0));
+
+		//Update the tank's position
+		match tank.move_state {
+			TankMoving::Forwards => {
+				let mut v = tank.forward * tank.speed * time_delta;
+				v.x *= -1.0;
+				tank.position += v;
+			}
+			TankMoving::Backwards => {
+				let mut v = tank.forward * -tank.speed * time_delta;
+				v.x *= -1.0;
+				tank.position += v;
+			}
+			TankMoving::Not => {}
+		}
+
+		//Update the tank's forward vector
+		tank.forward = match tank.rotation_state {
+			TankRotating::Left => {
+				glm::vec4_to_vec3(&(glm::rotation(-glm::half_pi::<f32>() * time_delta, &glm::vec3(0.0, 1.0, 0.0)) * glm::vec3_to_vec4(&tank.forward)))
+			}
+			TankRotating::Right => {
+				glm::vec4_to_vec3(&(glm::rotation(glm::half_pi::<f32>() * time_delta, &glm::vec3(0.0, 1.0, 0.0)) * glm::vec3_to_vec4(&tank.forward)))
+			}
+			TankRotating::Not => { tank.forward }
+		};
+		
+		let tank_angle = if tank.forward.x > 0.0 {
+			-f32::acos(glm::dot(&tank.forward, &glm::vec3(0.0, 0.0, 1.0)))
+		} else {
+			f32::acos(glm::dot(&tank.forward, &glm::vec3(0.0, 0.0, 1.0)))
+		};
+
+		tank.skeleton.node_data[0].transform = glm::translation(&tank.position) * glm::rotation(tank_angle, &glm::vec3(0.0, 1.0, 0.0));
+		//tank.skeleton.node_data[1].transform = glm::rotation(turret_angle, &glm::vec3(0.0, 1.0, 0.0));
 
 		//-----------Rendering-----------
 		unsafe {
@@ -220,26 +298,22 @@ fn main() {
 			}
 
 			//Render the tank
-			gl::BindVertexArray(tank_skeleton.vao);
-			for i in 0..tank_skeleton.node_list.len() {
+			gl::BindVertexArray(tank.skeleton.vao);
+			for i in 0..tank.skeleton.node_list.len() {
 				gl::ActiveTexture(gl::TEXTURE0);
-				gl::BindTexture(gl::TEXTURE_2D, tank_skeleton.albedo_maps[i]);
+				gl::BindTexture(gl::TEXTURE_2D, tank.skeleton.albedo_maps[i]);
 
 				let mut model_matrix = glm::identity();
-				let mut current_node = tank_skeleton.node_list[i];
-				while let Some(id) = tank_skeleton.node_data[current_node].parent {
-					model_matrix = tank_skeleton.node_data[current_node].transform * model_matrix;
+				let mut current_node = tank.skeleton.node_list[i];
+				while let Some(id) = tank.skeleton.node_data[current_node].parent {
+					model_matrix = tank.skeleton.node_data[current_node].transform * model_matrix;
 					current_node = id;
 				}
-				//println!("\n\n\n\nid: {}", i);
-				//println!("{}", model_matrix);
-				model_matrix = tank_skeleton.node_data[current_node].transform * model_matrix;
-				
-				//println!("{}", model_matrix);
+				model_matrix = tank.skeleton.node_data[current_node].transform * model_matrix;
 
 				glutil::bind_matrix4(mapped_shader, "mvp", &(projection_matrix * view_matrix * model_matrix));
 
-				gl::DrawElements(gl::TRIANGLES, (tank_skeleton.geo_boundaries[i + 1] - tank_skeleton.geo_boundaries[i]) as i32, gl::UNSIGNED_SHORT, (mem::size_of::<u16>() * tank_skeleton.geo_boundaries[i] as usize) as *const c_void);
+				gl::DrawElements(gl::TRIANGLES, (tank.skeleton.geo_boundaries[i + 1] - tank.skeleton.geo_boundaries[i]) as i32, gl::UNSIGNED_SHORT, (mem::size_of::<u16>() * tank.skeleton.geo_boundaries[i] as usize) as *const c_void);
 			}
 		}
 
