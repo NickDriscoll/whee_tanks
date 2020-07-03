@@ -29,7 +29,7 @@ pub struct Tank {
     pub speed: f32,
     pub forward: glm::TVec3<f32>,
     pub move_state: TankMoving,
-    pub rotation_state: TankRotating,
+    pub tank_rotating: Rotating,
     pub turret_forward: glm::TVec3<f32>,
     pub skeleton: Skeleton
 }
@@ -40,7 +40,7 @@ pub enum TankMoving {
     Not
 }
 
-pub enum TankRotating {
+pub enum Rotating {
     Left,
     Right,
     Not

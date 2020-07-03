@@ -2,7 +2,7 @@ extern crate nalgebra_glm as glm;
 use std::{mem, ptr};
 use std::collections::HashMap;
 use std::os::raw::c_void;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::Instant;
 use glfw::{Action, Context, Key, WindowEvent, WindowMode};
 use gl::types::*;
 use ozy_engine::{glutil, init, routines};
@@ -13,7 +13,7 @@ mod structs;
 fn main() {
 	let window_size = (1920, 1080);
 	let aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
-	let (mut glfw, mut window, events) = init::glfw_window(window_size, WindowMode::Windowed, 3, 3, "Whee! Tanks!");
+	let (mut glfw, mut window, events) = init::glfw_window(window_size, WindowMode::Windowed, 3, 3, "Whee! Tanks! for ipad");
 
 	//Make the window non-resizable
 	window.set_resizable(false);
@@ -65,8 +65,8 @@ fn main() {
 			4.5*arena_ratio, 0.0, 5.0,			tex_scale*arena_ratio, tex_scale
 		];
 		let indices = [
-			0u16, 2, 1,
-			3, 1, 2
+			0u16, 1, 2,
+			3, 2, 1
 		];
 
 		let piece = StaticGeometry {
@@ -80,26 +80,12 @@ fn main() {
 	};
 
 	//Load the tank's graphics
+	let mut turret_origin = glm::zero();
 	let mut tank = match routines::load_ozymesh("models/tank.ozy") {
 		Some(meshdata) => {
 			let mut node_list = Vec::with_capacity(meshdata.names.len());
 			let mut albedo_maps = Vec::with_capacity(meshdata.names.len());
 			let mut node_data = Vec::new();
-
-			//Load associated textures
-			for name in meshdata.texture_names.iter() {
-				let path = format!("textures/{}/albedo.png", name);
-				match texture_keeper.get(&path) {
-					Some(id) => {
-						albedo_maps.push(*id);
-					}
-					None => {
-						let tex = unsafe { glutil::load_texture(&path, &default_tex_params) };
-						texture_keeper.insert(path, tex);
-						albedo_maps.push(tex);
-					}
-				}
-			}
 
 			//Load node info
 			for i in 0..meshdata.node_ids.len() {
@@ -116,6 +102,28 @@ fn main() {
 					});
 				}
 				node_list.push(meshdata.node_ids[i] as usize - 1);
+
+				//Load texture
+				let path = format!("textures/{}/albedo.png", meshdata.texture_names[i]);
+				match texture_keeper.get(&path) {
+					Some(id) => {
+						albedo_maps.push(*id);
+					}
+					None => {
+						let tex = unsafe { glutil::load_texture(&path, &default_tex_params) };
+						texture_keeper.insert(path, tex);
+						albedo_maps.push(tex);
+					}
+				}
+
+				//Also get turret_origin
+				if meshdata.names[i] == "Turret" {
+					turret_origin = meshdata.origins[i];
+				}
+			}
+
+			if turret_origin == glm::zero() {
+				println!("No mesh named \"Turret\" when loading the tank.");
 			}
 
 			//Create the vertex array object
@@ -129,16 +137,16 @@ fn main() {
 			};
 
 			//Load the tank's gameplay data
-			let mut turret_forward = glm::vec3(0.0, 0.0, 1.0);
-			let mut tank_forward = glm::vec3(0.0, 0.0, 1.0);
-			let mut tank_position = glm::vec3(0.0, 0.0, 0.0);
-			let mut tank_speed = 2.5;
+			let tank_forward = glm::vec3(-1.0, 0.0, 0.0);
+			let turret_forward = tank_forward;
+			let tank_position = glm::vec3(0.0, 0.0, 0.0);
+			let tank_speed = 2.5;
 			Tank {
 				position: tank_position,
 				speed: tank_speed,
 				forward: tank_forward,
 				move_state: TankMoving::Not,
-				rotation_state: TankRotating::Not,
+				tank_rotating: Rotating::Not,
 				turret_forward,
 				skeleton
 			}
@@ -149,15 +157,23 @@ fn main() {
 	};
 
 	//The view-projection matrix is constant
-	let view_matrix = glm::look_at(&glm::vec3(0.0, 1.5, -1.0), &glm::vec3(0.0, 0.0, 0.0), &glm::vec3(0.0, 1.0, 0.0));
+	let view_matrix = glm::mat4(-1.0, 0.0, 0.0, 0.0,
+								0.0, 1.0, 0.0, 0.0,
+								0.0, 0.0, 1.0, 0.0,
+								0.0, 0.0, 0.0, 1.0) * glm::look_at(&glm::vec3(0.0, 1.5, -1.0), &glm::vec3(0.0, 0.0, 0.0), &glm::vec3(0.0, 1.0, 0.0));
+	let inverse_view_matrix = glm::affine_inverse(view_matrix);
 	let ortho_size = 5.0;
 	let projection_matrix = glm::ortho(-ortho_size*aspect_ratio, ortho_size*aspect_ratio, -ortho_size, ortho_size, -ortho_size, ortho_size);
+	let viewprojection_matrix = projection_matrix * view_matrix;
+	let inverse_viewprojection_matrix = glm::affine_inverse(viewprojection_matrix);
+	let world_space_look_direction = inverse_view_matrix * glm::vec4(0.0, 0.0, 1.0, 0.0);
 
 	//Set up the light source
 	let sun_direction = glm::normalize(&glm::vec4(1.0, 1.0, 1.0, 0.0));
 
 	let mut last_frame_instant = Instant::now();
 	let mut elapsed_time = 0.0;
+	let mut world_space_mouse = inverse_viewprojection_matrix * glm::vec4(0.0, 0.0, 0.0, 1.0);
 
 	let mut is_wireframe = false;
 	
@@ -193,16 +209,10 @@ fn main() {
 							tank.move_state = TankMoving::Backwards
 						}
 						Key::A => {
-							tank.rotation_state = TankRotating::Left;
+							tank.tank_rotating = Rotating::Left;
 						}
 						Key::D => {
-							tank.rotation_state = TankRotating::Right;
-						}
-						Key::Left => {
-							
-						}
-						Key::Right => {
-
+							tank.tank_rotating = Rotating::Right;
 						}
 						_ => {}
 					}
@@ -213,13 +223,14 @@ fn main() {
 							tank.move_state = TankMoving::Not;
 						}
 						Key::A | Key::D => {
-							tank.rotation_state = TankRotating::Not;
+							tank.tank_rotating = Rotating::Not;
 						}
 						_ => {}
 					}
 				}
 				WindowEvent::CursorPos(x, y) => {
-					//println!("{}, {}", x, y);
+					let clipping_space_mouse = glm::vec4(x as f32 / (window_size.0 as f32 / 2.0) - 1.0, y as f32 / (window_size.1 as f32 / 2.0) - 1.0, 0.0, 1.0);
+					world_space_mouse = inverse_viewprojection_matrix * clipping_space_mouse;
 				}
                 _ => {}
             }
@@ -230,47 +241,50 @@ fn main() {
 		//Update the tank's position
 		match tank.move_state {
 			TankMoving::Forwards => {
-				let mut v = tank.forward * tank.speed * time_delta;
-				v.x *= -1.0;
-				tank.position += v;
+				tank.position += tank.forward * -tank.speed * time_delta;
 			}
 			TankMoving::Backwards => {
-				let mut v = tank.forward * -tank.speed * time_delta;
-				v.x *= -1.0;
-				tank.position += v;
+				tank.position += tank.forward * tank.speed * time_delta;
 			}
 			TankMoving::Not => {}
 		}
 
 		//Update the tank's forward vector
-		tank.forward = match tank.rotation_state {
-			TankRotating::Left => {
+		tank.forward = match tank.tank_rotating {
+			Rotating::Left => {
 				glm::vec4_to_vec3(&(glm::rotation(-glm::half_pi::<f32>() * time_delta, &glm::vec3(0.0, 1.0, 0.0)) * glm::vec3_to_vec4(&tank.forward)))
 			}
-			TankRotating::Right => {
+			Rotating::Right => {
 				glm::vec4_to_vec3(&(glm::rotation(glm::half_pi::<f32>() * time_delta, &glm::vec3(0.0, 1.0, 0.0)) * glm::vec3_to_vec4(&tank.forward)))
 			}
-			TankRotating::Not => { tank.forward }
+			Rotating::Not => { tank.forward }
 		};
-		
+
+		//Calculate turret rotation
+		//Simple ray-plane intersection.
+		let turret_rotation = {
+			let plane_normal = glm::vec3(0.0, 1.0, 0.0);
+			let t = glm::dot(&glm::vec4_to_vec3(&(turret_origin - world_space_mouse)), &plane_normal) / glm::dot(&glm::vec4_to_vec3(&world_space_look_direction), &plane_normal);
+			let mut intersection = world_space_mouse + t * world_space_look_direction;
+			intersection.z *= -1.0;
+			let turret_vector = glm::normalize(&(intersection - turret_origin));
+			let angle = glm::dot(&tank.forward, &glm::vec4_to_vec3(&turret_vector));
+			println!("{:?}", turret_vector);
+			glm::rotation(angle, &glm::vec3(0.0, 1.0, 0.0))
+		};
+
 		let tank_angle = if tank.forward.x > 0.0 {
-			-f32::acos(glm::dot(&tank.forward, &glm::vec3(0.0, 0.0, 1.0)))
-		} else {
 			f32::acos(glm::dot(&tank.forward, &glm::vec3(0.0, 0.0, 1.0)))
+		} else {
+			-f32::acos(glm::dot(&tank.forward, &glm::vec3(0.0, 0.0, 1.0)))
 		};
 
 		tank.skeleton.node_data[0].transform = glm::translation(&tank.position) * glm::rotation(tank_angle, &glm::vec3(0.0, 1.0, 0.0));
-		//tank.skeleton.node_data[1].transform = glm::rotation(turret_angle, &glm::vec3(0.0, 1.0, 0.0));
+		tank.skeleton.node_data[1].transform = turret_rotation * glm::rotation(-tank_angle, &glm::vec3(0.0, 1.0, 0.0));
 
 		//-----------Rendering-----------
 		unsafe {
-			//Set polygon mode
-			if is_wireframe {
-				gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
-			} else {
-				gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);
-			}
-
+			//Set the viewport
 			gl::Viewport(0, 0, window_size.0 as GLsizei, window_size.1 as GLsizei);
 			gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
 
@@ -311,7 +325,7 @@ fn main() {
 				}
 				model_matrix = tank.skeleton.node_data[current_node].transform * model_matrix;
 
-				glutil::bind_matrix4(mapped_shader, "mvp", &(projection_matrix * view_matrix * model_matrix));
+				glutil::bind_matrix4(mapped_shader, "mvp", &(viewprojection_matrix * model_matrix));
 
 				gl::DrawElements(gl::TRIANGLES, (tank.skeleton.geo_boundaries[i + 1] - tank.skeleton.geo_boundaries[i]) as i32, gl::UNSIGNED_SHORT, (mem::size_of::<u16>() * tank.skeleton.geo_boundaries[i] as usize) as *const c_void);
 			}
