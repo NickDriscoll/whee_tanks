@@ -121,7 +121,6 @@ fn main() {
 					turret_origin = meshdata.origins[i];
 				}
 			}
-
 			if turret_origin == glm::zero() {
 				println!("No mesh named \"Turret\" when loading the tank.");
 			}
@@ -199,8 +198,13 @@ fn main() {
 						Key::Escape => {
 							window.set_should_close(true);
 						}
-						Key::Q => {
+						Key::Q => unsafe {
 							is_wireframe = !is_wireframe;
+							if is_wireframe {
+								gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
+							} else {
+								gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);
+							}
 						}
 						Key::W => {
 							tank.move_state = TankMoving::Forwards
@@ -267,10 +271,18 @@ fn main() {
 			let t = glm::dot(&glm::vec4_to_vec3(&(turret_origin - world_space_mouse)), &plane_normal) / glm::dot(&glm::vec4_to_vec3(&world_space_look_direction), &plane_normal);
 			let mut intersection = world_space_mouse + t * world_space_look_direction;
 			intersection.z *= -1.0;
-			let turret_vector = glm::normalize(&(intersection - turret_origin));
-			let angle = glm::dot(&tank.forward, &glm::vec4_to_vec3(&turret_vector));
+			let turret_vector = intersection - turret_origin;
 			println!("{:?}", turret_vector);
-			glm::rotation(angle, &glm::vec3(0.0, 1.0, 0.0))
+
+		};
+
+		let tank_rotation = {
+			let new_x = -glm::cross(&tank.forward, &glm::vec3(0.0, 1.0, 0.0));
+			glm::mat4(new_x.x, 0.0, tank.forward.x, 0.0,
+					  new_x.y, 1.0, tank.forward.y, 0.0,
+					  new_x.z, 0.0, tank.forward.z, 0.0,
+					  0.0, 0.0, 0.0, 1.0
+					)
 		};
 
 		let tank_angle = if tank.forward.x > 0.0 {
@@ -279,8 +291,8 @@ fn main() {
 			-f32::acos(glm::dot(&tank.forward, &glm::vec3(0.0, 0.0, 1.0)))
 		};
 
-		tank.skeleton.node_data[0].transform = glm::translation(&tank.position) * glm::rotation(tank_angle, &glm::vec3(0.0, 1.0, 0.0));
-		tank.skeleton.node_data[1].transform = turret_rotation * glm::rotation(-tank_angle, &glm::vec3(0.0, 1.0, 0.0));
+		tank.skeleton.node_data[0].transform = glm::translation(&tank.position) * tank_rotation;
+		//tank.skeleton.node_data[1].transform = turret_rotation * glm::rotation(-tank_angle, &glm::vec3(0.0, 1.0, 0.0));
 
 		//-----------Rendering-----------
 		unsafe {
