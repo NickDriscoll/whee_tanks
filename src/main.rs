@@ -3,9 +3,9 @@ use std::{mem, ptr};
 use std::collections::HashMap;
 use std::os::raw::c_void;
 use std::time::Instant;
-use glfw::{Action, Context, Key, WindowEvent, WindowMode};
+use glfw::{Action, Context, Key, MouseButton, WindowEvent, WindowMode};
 use gl::types::*;
-use ozy_engine::{glutil, init, routines};
+use ozy_engine::{glutil, routines};
 use crate::structs::*;
 
 mod structs;
@@ -13,7 +13,25 @@ mod structs;
 fn main() {
 	let window_size = (1920, 1080);
 	let aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
-	let (mut glfw, mut window, events) = init::glfw_window(window_size, WindowMode::Windowed, 3, 3, "Whee! Tanks! for ipad");
+
+	//Init glfw
+	let mut glfw = match glfw::init(glfw::FAIL_ON_ERRORS) {
+		Ok(g) => { g }
+		Err(e) => {	panic!("GLFW init error: {}", e); }
+	};
+
+	glfw.window_hint(glfw::WindowHint::ContextVersion(3, 3));
+	glfw.window_hint(glfw::WindowHint::OpenGlProfile(glfw::OpenGlProfileHint::Core));
+
+	//Get the primary monitor
+	let window_mode = glfw.with_primary_monitor_mut(|_, opt_monitor| {
+		if let Some(monitor) = opt_monitor {
+			let window_mode = WindowMode::FullScreen(&monitor);
+		}
+	});
+
+	//Create window
+    let (mut window, events) = glfw.create_window(window_size.0, window_size.1, "Whee! Tanks! for ipad", WindowMode::Windowed).unwrap();
 
 	//Make the window non-resizable
 	window.set_resizable(false);
@@ -28,12 +46,12 @@ fn main() {
 	//Load all OpenGL function pointers
 	gl::load_with(|symbol| window.get_proc_address(symbol) as *const _);
 
-	//OpenGL configuration
+	//OpenGL static configuration
 	unsafe {
 		gl::Enable(gl::DEPTH_TEST);										//Enable depth testing
 		gl::CullFace(gl::BACK);											//Cull backfaces
 		gl::Enable(gl::CULL_FACE);										//Enable said backface culling
-		gl::DepthFunc(gl::LEQUAL);										//Pass the fragment with the smallest z-value. Needs to be <= instead of < because for all skybox pixels z = 1.0
+		gl::DepthFunc(gl::LESS);										//Pass the fragment with the smallest z-value.
 		gl::Enable(gl::FRAMEBUFFER_SRGB); 								//Enable automatic linear->SRGB space conversion
 		gl::Enable(gl::BLEND);											//Enable alpha blending
 		gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);			//Set blend func to (Cs * alpha + Cd * (1.0 - alpha))
@@ -236,6 +254,9 @@ fn main() {
 					let clipping_space_mouse = glm::vec4(x as f32 / (window_size.0 as f32 / 2.0) - 1.0, -(y as f32 / (window_size.1 as f32 / 2.0) - 1.0), 0.0, 1.0);
 					world_space_mouse = inverse_viewprojection_matrix * clipping_space_mouse;
 				}
+				WindowEvent::MouseButton(MouseButton::Button1, Action::Press, ..) => {
+					println!("Fire");
+				}
                 _ => {}
             }
         }
@@ -277,7 +298,7 @@ fn main() {
 
 		//Calculate turret rotation
 		//Simple ray-plane intersection.
-		let turret_rotation = {
+		tank.skeleton.node_data[1].transform = {
 			let plane_normal = glm::vec3(0.0, 1.0, 0.0);
 			let origin = tank.skeleton.node_data[0].transform * turret_origin;
 			let t = glm::dot(&glm::vec4_to_vec3(&(origin - world_space_mouse)), &plane_normal) / glm::dot(&glm::vec4_to_vec3(&world_space_look_direction), &plane_normal);
@@ -288,10 +309,8 @@ fn main() {
 					  new_x.y, 1.0, turret_vector.y, 0.0,
 					  new_x.z, 0.0, turret_vector.z, 0.0,
 					  0.0, 0.0, 0.0, 1.0
-					)
+					) * glm::affine_inverse(tank_rotation)
 		};
-		tank.skeleton.node_data[1].transform = turret_rotation * glm::affine_inverse(tank_rotation);
-		//tank.skeleton.node_data[0].transform = glm::rotation(elapsed_time, );
 
 		//-----------Rendering-----------
 		unsafe {
