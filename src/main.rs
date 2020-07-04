@@ -233,7 +233,7 @@ fn main() {
 					}
 				}
 				WindowEvent::CursorPos(x, y) => {
-					let clipping_space_mouse = glm::vec4(x as f32 / (window_size.0 as f32 / 2.0) - 1.0, y as f32 / (window_size.1 as f32 / 2.0) - 1.0, 0.0, 1.0);
+					let clipping_space_mouse = glm::vec4(x as f32 / (window_size.0 as f32 / 2.0) - 1.0, -(y as f32 / (window_size.1 as f32 / 2.0) - 1.0), 0.0, 1.0);
 					world_space_mouse = inverse_viewprojection_matrix * clipping_space_mouse;
 				}
                 _ => {}
@@ -264,18 +264,6 @@ fn main() {
 			Rotating::Not => { tank.forward }
 		};
 
-		//Calculate turret rotation
-		//Simple ray-plane intersection.
-		let turret_rotation = {
-			let plane_normal = glm::vec3(0.0, 1.0, 0.0);
-			let t = glm::dot(&glm::vec4_to_vec3(&(turret_origin - world_space_mouse)), &plane_normal) / glm::dot(&glm::vec4_to_vec3(&world_space_look_direction), &plane_normal);
-			let mut intersection = world_space_mouse + t * world_space_look_direction;
-			intersection.z *= -1.0;
-			let turret_vector = intersection - turret_origin;
-			println!("{:?}", turret_vector);
-
-		};
-
 		let tank_rotation = {
 			let new_x = -glm::cross(&tank.forward, &glm::vec3(0.0, 1.0, 0.0));
 			glm::mat4(new_x.x, 0.0, tank.forward.x, 0.0,
@@ -285,14 +273,25 @@ fn main() {
 					)
 		};
 
-		let tank_angle = if tank.forward.x > 0.0 {
-			f32::acos(glm::dot(&tank.forward, &glm::vec3(0.0, 0.0, 1.0)))
-		} else {
-			-f32::acos(glm::dot(&tank.forward, &glm::vec3(0.0, 0.0, 1.0)))
-		};
-
 		tank.skeleton.node_data[0].transform = glm::translation(&tank.position) * tank_rotation;
-		//tank.skeleton.node_data[1].transform = turret_rotation * glm::rotation(-tank_angle, &glm::vec3(0.0, 1.0, 0.0));
+
+		//Calculate turret rotation
+		//Simple ray-plane intersection.
+		let turret_rotation = {
+			let plane_normal = glm::vec3(0.0, 1.0, 0.0);
+			let origin = tank.skeleton.node_data[0].transform * turret_origin;
+			let t = glm::dot(&glm::vec4_to_vec3(&(origin - world_space_mouse)), &plane_normal) / glm::dot(&glm::vec4_to_vec3(&world_space_look_direction), &plane_normal);
+			let intersection = world_space_mouse + t * world_space_look_direction;
+			let turret_vector = -glm::normalize(&(intersection - origin));
+			let new_x = -glm::cross(&glm::vec4_to_vec3(&turret_vector), &glm::vec3(0.0, 1.0, 0.0));
+			glm::mat4(new_x.x, 0.0, turret_vector.x, 0.0,
+					  new_x.y, 1.0, turret_vector.y, 0.0,
+					  new_x.z, 0.0, turret_vector.z, 0.0,
+					  0.0, 0.0, 0.0, 1.0
+					)
+		};
+		tank.skeleton.node_data[1].transform = turret_rotation * glm::affine_inverse(tank_rotation);
+		//tank.skeleton.node_data[0].transform = glm::rotation(elapsed_time, );
 
 		//-----------Rendering-----------
 		unsafe {
