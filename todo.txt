@@ -1,2 +1,1 @@
-Add normals and lighting
-Have turret face mouse cursor
+Add tangent/bitangent/normal and lighting
