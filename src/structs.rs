@@ -1,4 +1,7 @@
 use gl::types::*;
+use std::collections::HashMap;
+use ozy_engine::glutil;
+use crate::DEFAULT_TEX_PARAMS;
 
 pub struct StaticGeometry {
     pub vao: GLuint,
@@ -6,6 +9,11 @@ pub struct StaticGeometry {
     pub normal: GLuint,
     pub model_matrix: glm::TMat4<f32>,
     pub index_count: GLsizei
+}
+
+//Something too simple for a skeleton
+pub struct SingleMesh {
+
 }
 
 #[derive(Debug)]
@@ -41,7 +49,35 @@ pub struct Shell {
     pub position: glm::TVec4<f32>,
     pub velocity: glm::TVec4<f32>,
     pub transform: glm::TMat4<f32>,
+    pub spawn_time: f32,
     pub vao: GLuint
+}
+
+pub struct TextureKeeper {
+    pub map: HashMap<String, u32>
+}
+
+impl TextureKeeper {
+    pub fn new() -> Self {
+        TextureKeeper {
+            map: HashMap::new()
+        }
+    }
+
+    pub unsafe fn fetch_texture(&mut self, name: &str, map_type: &str) -> GLuint {        
+		let texture_path = format!("textures/{}/{}.png", name, map_type);
+		let id = match self.map.get(&texture_path) {
+			Some(t) => {
+				*t
+			}
+			None => {
+				let name = glutil::load_texture(&texture_path, &DEFAULT_TEX_PARAMS);
+				self.map.insert(texture_path, name);
+				name
+			}
+        };
+        id
+    }
 }
 
 pub enum TankMoving {

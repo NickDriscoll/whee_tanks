@@ -6,13 +6,21 @@ use std::time::Instant;
 use glfw::{Action, Context, Key, MouseButton, WindowEvent, WindowMode};
 use gl::types::*;
 use ozy_engine::{glutil, init, routines};
+use ozy_engine::structs::OptionVec;
 use crate::structs::*;
 
 mod structs;
 
+const DEFAULT_TEX_PARAMS: [(GLenum, GLenum); 4] = [
+	(gl::TEXTURE_WRAP_S, gl::REPEAT),
+	(gl::TEXTURE_WRAP_T, gl::REPEAT),
+	(gl::TEXTURE_MIN_FILTER, gl::LINEAR),
+	(gl::TEXTURE_MAG_FILTER, gl::LINEAR)
+];
+
 fn main() {
 	let mut window_size = (1920, 1080);
-	let aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
+	let mut aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
 
 	let (mut glfw, mut window, events) = init::glfw_window(window_size, WindowMode::Windowed, 3, 3, "Whee! Tanks! for ipad");
 
@@ -27,6 +35,8 @@ fn main() {
 			let pos = monitor.get_pos();
 			if let Some(mode) = monitor.get_video_mode() {
 				window_size = (mode.width, mode.height);
+				aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
+				window.set_size(window_size.0 as i32, window_size.1 as i32);
 				window.set_monitor(window_mode, pos.0, pos.1, window_size.0, window_size.1, Some(144));
 			}
 		}
@@ -55,16 +65,10 @@ fn main() {
 		gl::ClearColor(0.53, 0.81, 0.92, 1.0);							//Set clear color. A pleasant blue
 	}
 
-	//Compile shader
+	//Compile shader program
 	let mapped_shader = unsafe { glutil::compile_program_from_files("shaders/mapped_vertex.glsl", "shaders/mapped_fragment.glsl") };
-	let default_tex_params = [
-		(gl::TEXTURE_WRAP_S, gl::REPEAT),
-		(gl::TEXTURE_WRAP_T, gl::REPEAT),
-		(gl::TEXTURE_MIN_FILTER, gl::LINEAR),
-		(gl::TEXTURE_MAG_FILTER, gl::LINEAR)
-	];
 
-	let mut texture_keeper = HashMap::new();
+	let mut texture_keeper = TextureKeeper::new();
 
 	let mut arena_pieces = Vec::new();
 
@@ -73,11 +77,11 @@ fn main() {
 	unsafe {
 		let tex_scale = 2.0;
 		let vertices = [
-			//Positions							Texture coordinates
-			-4.5*arena_ratio, 0.0, -5.0,		0.0, 0.0,
-			4.5*arena_ratio, 0.0, -5.0,			tex_scale*arena_ratio, 0.0,
-			-4.5*arena_ratio, 0.0, 5.0,			0.0, tex_scale,
-			4.5*arena_ratio, 0.0, 5.0,			tex_scale*arena_ratio, tex_scale
+			//Positions							Tangents					Bitangents				Normals							Texture coordinates
+			-4.5*arena_ratio, 0.0, -5.0,		1.0, 0.0, 0.0,				0.0, 1.0, 0.0,			0.0, 0.0, 1.0,					0.0, 0.0,
+			4.5*arena_ratio, 0.0, -5.0,			1.0, 0.0, 0.0,				0.0, 1.0, 0.0,			0.0, 0.0, 1.0,					tex_scale*arena_ratio, 0.0,
+			-4.5*arena_ratio, 0.0, 5.0,			1.0, 0.0, 0.0,				0.0, 1.0, 0.0,			0.0, 0.0, 1.0,					0.0, tex_scale,
+			4.5*arena_ratio, 0.0, 5.0,			1.0, 0.0, 0.0,				0.0, 1.0, 0.0,			0.0, 0.0, 1.0,					tex_scale*arena_ratio, tex_scale
 		];
 		let indices = [
 			0u16, 1, 2,
@@ -85,9 +89,9 @@ fn main() {
 		];
 
 		let piece = StaticGeometry {
-			vao: glutil::create_vertex_array_object(&vertices, &indices, &[3, 2]),
-			albedo: glutil::load_texture("textures/bamboo_wood_semigloss/albedo.png", &default_tex_params),
-			normal: glutil::load_texture("textures/bamboo_wood_semigloss/normal.png", &default_tex_params),
+			vao: glutil::create_vertex_array_object(&vertices, &indices, &[3, 3, 3, 3, 2]),
+			albedo: glutil::load_texture("textures/bamboo_wood_semigloss/albedo.png", &DEFAULT_TEX_PARAMS),
+			normal: glutil::load_texture("textures/bamboo_wood_semigloss/normal.png", &DEFAULT_TEX_PARAMS),
 			model_matrix: glm::identity(),
 			index_count: indices.len() as GLsizei
 		};
@@ -97,10 +101,11 @@ fn main() {
 	//Load the tank
 	let mut turret_origin = glm::zero();
 	const TANK_SPEED: f32 = 2.5;
-	let mut tank = match routines::load_ozymesh("models/tank.ozy") {
+	let mut tank = match routines::load_ozymesh("models/tank2.ozy") {
 		Some(meshdata) => {
 			let mut node_list = Vec::with_capacity(meshdata.names.len());
 			let mut albedo_maps = Vec::with_capacity(meshdata.names.len());
+			let mut normal_maps = Vec::with_capacity(meshdata.names.len());
 			let mut node_data = Vec::new();
 
 			//Load node info
@@ -119,18 +124,13 @@ fn main() {
 				}
 				node_list.push(meshdata.node_ids[i] as usize - 1);
 
-				//Load texture
-				let path = format!("textures/{}/albedo.png", meshdata.texture_names[i]);
-				match texture_keeper.get(&path) {
-					Some(id) => {
-						albedo_maps.push(*id);
-					}
-					None => {
-						let tex = unsafe { glutil::load_texture(&path, &default_tex_params) };
-						texture_keeper.insert(path, tex);
-						albedo_maps.push(tex);
-					}
-				}
+				//Load albedo map
+				let albedo_id = unsafe { texture_keeper.fetch_texture(&meshdata.texture_names[i], "albedo") };
+				albedo_maps.push(albedo_id);
+
+				//Load normal map
+				let normal_id = unsafe { texture_keeper.fetch_texture(&meshdata.texture_names[i], "normal") };
+				normal_maps.push(normal_id);
 
 				//Also get turret_origin
 				if meshdata.names[i] == "Turret" {
@@ -171,19 +171,21 @@ fn main() {
 		}
 	};
 
-	//Load tank shell mesh
-	let (shell_vao, shell_origin, shell_index_count) = match routines::load_ozymesh("models/shell.ozy") {
+	//Load shell graphics
+	let (shell_vao, shell_albedo, shell_normal, shell_index_count) = match routines::load_ozymesh("models/shell2.ozy") {
 		Some(meshdata) => unsafe {
-			let origin = meshdata.origins[0];
 			let count = meshdata.geo_boundaries[1];
-			(glutil::create_vertex_array_object(&meshdata.vertex_array.vertices, &meshdata.vertex_array.indices, &meshdata.vertex_array.attribute_offsets), origin, count)
+			let albedo = texture_keeper.fetch_texture(&meshdata.texture_names[0], "albedo");
+			let normal = texture_keeper.fetch_texture(&meshdata.texture_names[0], "normal");
+
+			(glutil::create_vertex_array_object(&meshdata.vertex_array.vertices, &meshdata.vertex_array.indices, &meshdata.vertex_array.attribute_offsets), albedo, normal, count)
 		}
 		None => {
 			panic!("Unable to load model.");
 		}
 	};
 
-	let mut shells = ozy_engine::structs::OptionVec::new();
+	let mut shells = OptionVec::new();
 
 	//The view-projection matrix is constant
 	let view_matrix = glm::mat4(-1.0, 0.0, 0.0, 0.0,
@@ -335,14 +337,15 @@ fn main() {
 				position,
 				velocity,
 				transform,
+				spawn_time: elapsed_time,
 				vao: shell_vao
 			});
 			tank.firing = false;
 		}
 
 		//Update shells
-		for opt_shell in shells.iter_mut() {
-			if let Some(shell) = opt_shell {
+		for i in 0..shells.len() {
+			if let Some(shell) = &mut shells[i] {
 				shell.position += shell.velocity * delta_time;
 
 				//Just updating the translation part of the matrix
@@ -389,6 +392,7 @@ fn main() {
 
 				let node_index = tank.skeleton.node_list[i];
 				glutil::bind_matrix4(mapped_shader, "mvp", &(viewprojection_matrix * tank.skeleton.node_data[node_index].transform));
+				glutil::bind_matrix4(mapped_shader, "model_matrix", &tank.skeleton.node_data[node_index].transform);
 
 				gl::DrawElements(gl::TRIANGLES, (tank.skeleton.geo_boundaries[i + 1] - tank.skeleton.geo_boundaries[i]) as i32, gl::UNSIGNED_SHORT, (mem::size_of::<u16>() * tank.skeleton.geo_boundaries[i] as usize) as *const c_void);
 			}
@@ -398,9 +402,10 @@ fn main() {
 				if let Some(shell) = opt_shell {
 					gl::BindVertexArray(shell_vao);
 					gl::ActiveTexture(gl::TEXTURE0);
-					gl::BindTexture(gl::TEXTURE_2D, tank.skeleton.albedo_maps[0]);
+					gl::BindTexture(gl::TEXTURE_2D, shell_albedo);
 
 					glutil::bind_matrix4(mapped_shader, "mvp", &(viewprojection_matrix * shell.transform));
+					glutil::bind_matrix4(mapped_shader, "model_matrix", &shell.transform);
 
 					gl::DrawElements(gl::TRIANGLES, shell_index_count as GLsizei, gl::UNSIGNED_SHORT, ptr::null());
 				}
