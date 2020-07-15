@@ -6,18 +6,17 @@ layout (location = 2) in vec3 bitangent;
 layout (location = 3) in vec3 normal;
 layout (location = 4) in vec2 uv;
 
-out vec4 f_tangent;
-out vec4 f_bitangent;
-out vec4 f_normal;
+out mat3 tangent_matrix;
 out vec2 f_uvs;
 
 uniform mat4 mvp;
 uniform mat4 model_matrix;
 
-void main() {
-    f_tangent = model_matrix * vec4(tangent, 0.0);
-    f_bitangent = model_matrix * vec4(bitangent, 0.0);
-    f_normal = model_matrix * vec4(normal, 0.0);
+void main() {    
+    vec3 T = normalize(vec3(model_matrix * vec4(tangent, 0.0)));
+    vec3 B = normalize(vec3(model_matrix * vec4(bitangent, 0.0)));
+    vec3 N = normalize(vec3(model_matrix * vec4(normal, 0.0)));
+    tangent_matrix = mat3(T, B, N);
     f_uvs = uv;
     gl_Position = mvp * vec4(position, 1.0);
 }

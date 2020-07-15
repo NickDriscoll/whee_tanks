@@ -12,8 +12,11 @@ pub struct StaticGeometry {
 }
 
 //Something too simple for a skeleton
-pub struct SingleMesh {
-
+pub struct IndividualMesh {
+    pub vao: GLuint,
+    pub albedo_map: GLuint,
+    pub normal_map: GLuint,
+    pub index_count: GLint
 }
 
 #[derive(Debug)]
@@ -22,7 +25,8 @@ pub struct Skeleton {
     pub node_data: Vec<SkeletonNode>,
 	pub node_list: Vec<usize>,
 	pub geo_boundaries: Vec<u16>,			//[0, a, b, c, ..., indices.length - 1]
-	pub albedo_maps: Vec<GLuint>
+    pub albedo_maps: Vec<GLuint>,
+    pub normal_maps: Vec<GLuint>
 }
 
 //Represents a single bone in a skeleton

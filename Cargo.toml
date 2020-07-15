@@ -12,4 +12,3 @@ ozy_engine = { path = "../ozy_engine" }
 glfw = "0.32.0"
 gl = "0.10.0"
 nalgebra-glm = "*"
-wavefront_obj = "6.0.0"
