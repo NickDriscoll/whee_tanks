@@ -1,5 +1,6 @@
 extern crate nalgebra_glm as glm;
 use std::{mem, ptr};
+use std::collections::HashMap;
 use std::os::raw::c_void;
 use std::time::Instant;
 use glfw::{Action, Context, Key, MouseButton, WindowEvent, WindowMode};
@@ -67,6 +68,7 @@ fn main() {
 	//Compile shader program
 	let mapped_shader = unsafe { glutil::compile_program_from_files("shaders/mapped.vert", "shaders/mapped.frag") };
 
+	//Keeps track of loaded textures
 	let mut texture_keeper = TextureKeeper::new();
 
 	let mut arena_pieces = Vec::new();
@@ -191,7 +193,7 @@ fn main() {
 		}
 	};
 
-	let sphere_mesh = match routines::load_ozymesh("models/sphere.ozy") {
+	let sphere_mesh = match routines::load_ozymesh("models/cube.ozy") {
 		Some(meshdata) => unsafe {
 			let vao = glutil::create_vertex_array_object(&meshdata.vertex_array.vertices, &meshdata.vertex_array.indices, &meshdata.vertex_array.attribute_offsets);
 			let count = meshdata.geo_boundaries[1] as GLint;
@@ -213,25 +215,43 @@ fn main() {
 	let mut shells = OptionVec::new();
 
 	//The view-projection matrix is constant
-	let view_matrix = glm::mat4(-1.0, 0.0, 0.0, 0.0,
+	let view_from_world = glm::mat4(-1.0, 0.0, 0.0, 0.0,
 								0.0, 1.0, 0.0, 0.0,
 								0.0, 0.0, 1.0, 0.0,
 								0.0, 0.0, 0.0, 1.0) * glm::look_at(&glm::vec3(0.0, 1.5, -1.0), &glm::vec3(0.0, 0.0, 0.0), &glm::vec3(0.0, 1.0, 0.0));
-	let inverse_view_matrix = glm::affine_inverse(view_matrix);
+	let world_from_view = glm::affine_inverse(view_from_world);
 	let ortho_size = 5.0;
-	let projection_matrix = glm::ortho(-ortho_size*aspect_ratio, ortho_size*aspect_ratio, -ortho_size, ortho_size, -ortho_size, ortho_size);
-	let viewprojection_matrix = projection_matrix * view_matrix;
-	let inverse_viewprojection_matrix = glm::affine_inverse(viewprojection_matrix);
-	let world_space_look_direction = inverse_view_matrix * glm::vec4(0.0, 0.0, 1.0, 0.0);
+	let clipping_from_view = glm::ortho(-ortho_size*aspect_ratio, ortho_size*aspect_ratio, -ortho_size, ortho_size, -ortho_size, ortho_size);
+	let clipping_from_world = clipping_from_view * view_from_world;
+	let world_from_clipping = glm::affine_inverse(clipping_from_world);
+
+	let world_space_look_direction = world_from_view * glm::vec4(0.0, 0.0, 1.0, 0.0);
 
 	//Set up the light source
 	let sun_direction = glm::normalize(&glm::vec4(1.0, 1.0, -1.0, 0.0));
 
 	let mut last_frame_instant = Instant::now();
 	let mut elapsed_time = 0.0;
-	let mut world_space_mouse = inverse_viewprojection_matrix * glm::vec4(0.0, 0.0, 0.0, 1.0);
+	let mut world_space_mouse = world_from_clipping * glm::vec4(0.0, 0.0, 0.0, 1.0);
 
 	let mut is_wireframe = false;
+
+	//Each frame this is filled with commands, then drained when processed
+	let mut command_buffer = Vec::new();
+
+	//Default keybindings
+	let mut key_bindings = HashMap::new();
+	key_bindings.insert((Key::Escape, Action::Press), Commands::Quit);
+	key_bindings.insert((Key::Q, Action::Press), Commands::ToggleWireframe);
+	key_bindings.insert((Key::W, Action::Press), Commands::MoveForwards);
+	key_bindings.insert((Key::S, Action::Press), Commands::MoveBackwards);
+	key_bindings.insert((Key::A, Action::Press), Commands::RotateLeft);
+	key_bindings.insert((Key::D, Action::Press), Commands::RotateRight);
+
+	key_bindings.insert((Key::W, Action::Release), Commands::StopMoving);
+	key_bindings.insert((Key::S, Action::Release), Commands::StopMoving);
+	key_bindings.insert((Key::A, Action::Release), Commands::StopRotating);
+	key_bindings.insert((Key::D, Action::Release), Commands::StopRotating);
 	
 	//Main loop
     while !window.should_close() {
@@ -250,55 +270,60 @@ fn main() {
         for (_, event) in glfw::flush_messages(&events) {
             match event {
 				WindowEvent::Close => { window.set_should_close(true); }
-				WindowEvent::Key(key, _, Action::Press, ..) => {
-					match key {
-						Key::Escape => {
-							window.set_should_close(true);
-						}
-						Key::Q => unsafe {
-							is_wireframe = !is_wireframe;
-							if is_wireframe {
-								gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
-							} else {
-								gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);
-							}
-						}
-						Key::W => {
-							tank.move_state = TankMoving::Forwards
-						}
-						Key::S => {
-							tank.move_state = TankMoving::Backwards
-						}
-						Key::A => {
-							tank.tank_rotating = Rotating::Left;
-						}
-						Key::D => {
-							tank.tank_rotating = Rotating::Right;
-						}
-						_ => {}
-					}
-				}
-				WindowEvent::Key(key, _, Action::Release, ..) => {
-					match key {
-						Key::W | Key::S => {
-							tank.move_state = TankMoving::Not;
-						}
-						Key::A | Key::D => {
-							tank.tank_rotating = Rotating::Not;
-						}
-						_ => {}
+				WindowEvent::Key(key, _, action, ..) => {
+					match key_bindings.get(&(key, action)) {
+						Some(command) => { command_buffer.push(command); }
+						None => {  }
 					}
 				}
 				WindowEvent::CursorPos(x, y) => {
 					//We have to flip the y coordinate because glfw thinks (0, 0) is in the top left
 					let clipping_space_mouse = glm::vec4(x as f32 / (window_size.0 as f32 / 2.0) - 1.0, -(y as f32 / (window_size.1 as f32 / 2.0) - 1.0), 0.0, 1.0);
-					world_space_mouse = inverse_viewprojection_matrix * clipping_space_mouse;
+					world_space_mouse = world_from_clipping * clipping_space_mouse;
 				}
 				WindowEvent::MouseButton(MouseButton::Button1, Action::Press, ..) => { tank.firing = true; }
                 _ => {}
             }
         }
 		
+		//Process the generated Commands
+		for command in command_buffer.drain(0..command_buffer.len()) {
+			match command {
+				Commands::Quit => {
+					window.set_should_close(true);
+				}
+				Commands::ToggleWireframe => unsafe {
+					is_wireframe = !is_wireframe;
+					if is_wireframe {
+						gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
+					} else {
+						gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);
+					}
+				}
+				Commands::MoveForwards => {
+					tank.move_state = TankMoving::Forwards;
+				}
+				Commands::MoveBackwards => {
+					tank.move_state = TankMoving::Backwards;
+				}
+				Commands::RotateLeft => {
+					tank.tank_rotating = Rotating::Left;
+				}
+				Commands::RotateRight => {
+					tank.tank_rotating = Rotating::Right;
+				}
+				Commands::StopMoving => {
+					tank.move_state = TankMoving::Not;
+				}
+				Commands::StopRotating => {
+					tank.tank_rotating = Rotating::Not;
+				}
+				Commands::ToggleFreecam => {
+
+				}
+			}
+		}
+
 		//-----------Simulating-----------
 
 		//Update the tank's position
@@ -380,7 +405,7 @@ fn main() {
 			}
 		}
 
-		let sphere_matrix = glm::rotation(elapsed_time, &glm::vec3(0.0, 1.0, 0.0));
+		let sphere_matrix = glm::rotation(0.0, &glm::vec3(0.0, 1.0, 0.0));
 
 		//-----------Rendering-----------
 		unsafe {
@@ -400,7 +425,7 @@ fn main() {
 
 			//Render static pieces of the arena
 			for piece in arena_pieces.iter() {
-				glutil::bind_matrix4(mapped_shader, "mvp", &(projection_matrix * view_matrix * piece.model_matrix));
+				glutil::bind_matrix4(mapped_shader, "mvp", &(clipping_from_view * view_from_world * piece.model_matrix));
 				glutil::bind_matrix4(mapped_shader, "model_matrix", &piece.model_matrix);
 
 				//Albedo map
@@ -424,7 +449,7 @@ fn main() {
 				gl::BindTexture(gl::TEXTURE_2D, tank.skeleton.normal_maps[i]);
 
 				let node_index = tank.skeleton.node_list[i];
-				glutil::bind_matrix4(mapped_shader, "mvp", &(viewprojection_matrix * tank.skeleton.node_data[node_index].transform));
+				glutil::bind_matrix4(mapped_shader, "mvp", &(clipping_from_world * tank.skeleton.node_data[node_index].transform));
 				glutil::bind_matrix4(mapped_shader, "model_matrix", &tank.skeleton.node_data[node_index].transform);
 
 				gl::DrawElements(gl::TRIANGLES, (tank.skeleton.geo_boundaries[i + 1] - tank.skeleton.geo_boundaries[i]) as i32, gl::UNSIGNED_SHORT, (mem::size_of::<u16>() * tank.skeleton.geo_boundaries[i] as usize) as *const c_void);
@@ -435,7 +460,7 @@ fn main() {
 			gl::BindTexture(gl::TEXTURE_2D, sphere_mesh.albedo_map);
 			gl::ActiveTexture(gl::TEXTURE1);
 			gl::BindTexture(gl::TEXTURE_2D, sphere_mesh.normal_map);
-			glutil::bind_matrix4(mapped_shader, "mvp", &(viewprojection_matrix * sphere_matrix));
+			glutil::bind_matrix4(mapped_shader, "mvp", &(clipping_from_world * sphere_matrix));
 			glutil::bind_matrix4(mapped_shader, "model_matrix", &sphere_matrix);
 			gl::DrawElements(gl::TRIANGLES, sphere_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null());
 
@@ -449,7 +474,7 @@ fn main() {
 					gl::ActiveTexture(gl::TEXTURE1);
 					gl::BindTexture(gl::TEXTURE_2D, shell_mesh.normal_map);
 
-					glutil::bind_matrix4(mapped_shader, "mvp", &(viewprojection_matrix * shell.transform));
+					glutil::bind_matrix4(mapped_shader, "mvp", &(clipping_from_world * shell.transform));
 					glutil::bind_matrix4(mapped_shader, "model_matrix", &shell.transform);
 
 					gl::DrawElements(gl::TRIANGLES, shell_mesh.index_count as GLsizei, gl::UNSIGNED_SHORT, ptr::null());

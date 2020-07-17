@@ -95,3 +95,17 @@ pub enum Rotating {
     Right,
     Not
 }
+
+//Actions that can be mapped to buttons/keys
+#[derive(Debug)]
+pub enum Commands {
+    Quit,
+    ToggleWireframe,
+    RotateLeft,
+    RotateRight,
+    MoveForwards,
+    MoveBackwards,
+    StopMoving,
+    StopRotating,
+    ToggleFreecam
+}
