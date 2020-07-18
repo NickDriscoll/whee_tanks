@@ -1,6 +1,6 @@
 use gl::types::*;
 use std::collections::HashMap;
-use ozy_engine::glutil;
+use ozy_engine::{glutil, routines};
 use crate::DEFAULT_TEX_PARAMS;
 
 pub struct StaticGeometry {
@@ -17,6 +17,29 @@ pub struct IndividualMesh {
     pub albedo_map: GLuint,
     pub normal_map: GLuint,
     pub index_count: GLint
+}
+
+impl IndividualMesh {
+    pub fn from_ozy(path: &str, texture_keeper: &mut TextureKeeper) -> Self {
+        match routines::load_ozymesh(path) {
+            Some(meshdata) => unsafe {
+                let vao = glutil::create_vertex_array_object(&meshdata.vertex_array.vertices, &meshdata.vertex_array.indices, &meshdata.vertex_array.attribute_offsets);
+                let count = meshdata.geo_boundaries[1] as GLint;
+                let albedo = texture_keeper.fetch_texture(&meshdata.texture_names[0], "albedo");
+                let normal = texture_keeper.fetch_texture(&meshdata.texture_names[0], "normal");
+    
+                IndividualMesh {
+                    vao,
+                    albedo_map: albedo,
+                    normal_map: normal,
+                    index_count: count as GLint
+                }
+            }
+            None => {
+                panic!("Unable to load model.");
+            }
+        }
+    }
 }
 
 #[derive(Debug)]

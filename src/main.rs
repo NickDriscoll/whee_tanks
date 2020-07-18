@@ -174,43 +174,8 @@ fn main() {
 	};
 
 	//Load shell graphics
-	let shell_mesh = match routines::load_ozymesh("models/better_shell.ozy") {
-		Some(meshdata) => unsafe {
-			let vao = glutil::create_vertex_array_object(&meshdata.vertex_array.vertices, &meshdata.vertex_array.indices, &meshdata.vertex_array.attribute_offsets);
-			let count = meshdata.geo_boundaries[1] as GLint;
-			let albedo = texture_keeper.fetch_texture(&meshdata.texture_names[0], "albedo");
-			let normal = texture_keeper.fetch_texture(&meshdata.texture_names[0], "normal");
-
-			IndividualMesh {
-				vao,
-				albedo_map: albedo,
-				normal_map: normal,
-				index_count: count as GLint
-			}
-		}
-		None => {
-			panic!("Unable to load model.");
-		}
-	};
-
-	let sphere_mesh = match routines::load_ozymesh("models/cube.ozy") {
-		Some(meshdata) => unsafe {
-			let vao = glutil::create_vertex_array_object(&meshdata.vertex_array.vertices, &meshdata.vertex_array.indices, &meshdata.vertex_array.attribute_offsets);
-			let count = meshdata.geo_boundaries[1] as GLint;
-			let albedo = texture_keeper.fetch_texture(&meshdata.texture_names[0], "albedo");
-			let normal = texture_keeper.fetch_texture(&meshdata.texture_names[0], "normal");
-
-			IndividualMesh {
-				vao,
-				albedo_map: albedo,
-				normal_map: normal,
-				index_count: count
-			}
-		}
-		None => {
-			panic!("Unable to load model.");
-		}
-	};
+	let shell_mesh = IndividualMesh::from_ozy("models/better_shell.ozy", &mut texture_keeper);
+	let sphere_mesh = IndividualMesh::from_ozy("models/cube.ozy", &mut texture_keeper);
 
 	let mut shells = OptionVec::new();
 
@@ -405,7 +370,7 @@ fn main() {
 			}
 		}
 
-		let sphere_matrix = glm::rotation(0.0, &glm::vec3(0.0, 1.0, 0.0));
+		let sphere_matrix = glm::rotation(elapsed_time, &glm::vec3(0.0, 1.0, 0.0));
 
 		//-----------Rendering-----------
 		unsafe {
