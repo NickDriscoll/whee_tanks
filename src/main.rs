@@ -22,7 +22,7 @@ fn main() {
 	let mut window_size = (1920, 1080);
 	let mut aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
 
-	let (mut glfw, mut window, events) = init::glfw_window(window_size, WindowMode::Windowed, 3, 3, "Whee! Tanks! for ipad");
+	let (mut glfw, mut window, events) = init::glfw_window(window_size, WindowMode::Windowed, 4, 3, "Whee! Tanks! for ipad");
 
 	//Make the window non-resizable
 	window.set_resizable(false);
@@ -67,6 +67,7 @@ fn main() {
 
 	//Compile shader program
 	let mapped_shader = unsafe { glutil::compile_program_from_files("shaders/mapped.vert", "shaders/mapped.frag") };
+	let mapped_instanced_shader = unsafe { glutil::compile_program_from_files("shaders/mapped_instanced.vert", "shaders/mapped.frag") };
 
 	//Keeps track of loaded textures
 	let mut texture_keeper = TextureKeeper::new();
@@ -74,8 +75,8 @@ fn main() {
 	let mut arena_pieces = Vec::new();
 
 	//Define the floor plane
-	let arena_ratio = 16.0 / 9.0;
 	unsafe {
+		let arena_ratio = 16.0 / 9.0;
 		let tex_scale = 2.0;
 		let vertices = [
 			//Positions							Tangents					Bitangents				Normals							Texture coordinates
@@ -91,8 +92,8 @@ fn main() {
 
 		let piece = StaticGeometry {
 			vao: glutil::create_vertex_array_object(&vertices, &indices, &[3, 3, 3, 3, 2]),
-			albedo: glutil::load_texture("textures/bamboo_wood_semigloss/albedo.png", &DEFAULT_TEX_PARAMS),
-			normal: glutil::load_texture("textures/bamboo_wood_semigloss/normal.png", &DEFAULT_TEX_PARAMS),
+			albedo: texture_keeper.fetch_texture("bamboo_wood_semigloss", "albedo"),
+			normal: texture_keeper.fetch_texture("bamboo_wood_semigloss", "normal"),
 			model_matrix: glm::identity(),
 			index_count: indices.len() as GLsizei
 		};
@@ -101,7 +102,7 @@ fn main() {
 
 	//Load the tank
 	let mut turret_origin = glm::zero();
-	const TANK_SPEED: f32 = 2.5;
+	const TANK_SPEED: f32 = 1.5;
 	let mut tank = match routines::load_ozymesh("models/better_tank.ozy") {
 		Some(meshdata) => {
 			let mut node_list = Vec::with_capacity(meshdata.names.len());
@@ -175,9 +176,32 @@ fn main() {
 
 	//Load shell graphics
 	let shell_mesh = IndividualMesh::from_ozy("models/better_shell.ozy", &mut texture_keeper);
-	let sphere_mesh = IndividualMesh::from_ozy("models/cube.ozy", &mut texture_keeper);
+	
+	//Create GPU buffer for instanced positions
+	let shell_instanced_buffer = unsafe {
+		gl::BindVertexArray(shell_mesh.vao);
 
-	let mut shells = OptionVec::new();
+		let mut b = 0;
+		gl::GenBuffers(1, &mut b);
+		gl::BindBuffer(gl::ARRAY_BUFFER, b);
+		gl::BufferData(gl::ARRAY_BUFFER, (100 * 16 * mem::size_of::<GLfloat>()) as GLsizeiptr, ptr::null(), gl::DYNAMIC_DRAW);
+
+		//Attach this buffer to the shell_mesh vao
+		for i in 0..4 {
+			gl::VertexAttribPointer(5 + i,
+									4,
+									gl::FLOAT,
+									gl::FALSE,
+									(16 * mem::size_of::<GLfloat>()) as GLsizei,
+									(i * 4 * mem::size_of::<GLfloat>() as GLuint) as *const c_void);
+			gl::EnableVertexAttribArray(5 + i);
+			gl::VertexAttribDivisor(5 + i, 1);
+		}
+
+		b
+	};
+
+	let mut shells: OptionVec<Shell> = OptionVec::new();
 
 	//The view-projection matrix is constant
 	let view_from_world = glm::mat4(-1.0, 0.0, 0.0, 0.0,
@@ -342,6 +366,8 @@ fn main() {
 					) * glm::affine_inverse(tank_rotation)
 		};
 
+		//--------------------Shell update section--------------------
+
 		//Fire a shell if the mouse was clicked this frame
 		if tank.firing {
 			let transform = tank.skeleton.node_data[1].transform;
@@ -352,25 +378,42 @@ fn main() {
 				position,
 				velocity,
 				transform,
-				spawn_time: elapsed_time,
 				vao: shell_mesh.vao
 			});
-			tank.firing = false;
 		}
-
+		
 		//Update shells
+		let mut shell_transforms = vec![0.0; shells.count() * 16];
+		let mut current_shell = 0;
 		for i in 0..shells.len() {
 			if let Some(shell) = &mut shells[i] {
+				//Update position
 				shell.position += shell.velocity * delta_time;
 
-				//Just updating the translation part of the matrix
 				shell.transform[12] = shell.position.x;
 				shell.transform[13] = shell.position.y;
 				shell.transform[14] = shell.position.z;
+
+				//Fill the position buffer used for instanced rendering
+				for j in 0..16 {
+					shell_transforms[current_shell * 16 + j] = shell.transform[j];
+				}
+				current_shell += 1;
 			}
 		}
 
-		let sphere_matrix = glm::rotation(elapsed_time, &glm::vec3(0.0, 1.0, 0.0));
+		//Update GPU buffer storing shell positions
+		if shell_transforms.len() > 0 {
+			unsafe {
+				gl::BindBuffer(gl::ARRAY_BUFFER, shell_instanced_buffer);
+				gl::BufferSubData(gl::ARRAY_BUFFER,
+								0 as GLsizeiptr, 
+								(shell_transforms.len() * mem::size_of::<GLfloat>()) as GLsizeiptr,
+								&shell_transforms[0] as *const GLfloat as *const c_void
+								);
+			}
+		}
+		tank.firing = false;
 
 		//-----------Rendering-----------
 		unsafe {
@@ -417,34 +460,29 @@ fn main() {
 				glutil::bind_matrix4(mapped_shader, "mvp", &(clipping_from_world * tank.skeleton.node_data[node_index].transform));
 				glutil::bind_matrix4(mapped_shader, "model_matrix", &tank.skeleton.node_data[node_index].transform);
 
-				gl::DrawElements(gl::TRIANGLES, (tank.skeleton.geo_boundaries[i + 1] - tank.skeleton.geo_boundaries[i]) as i32, gl::UNSIGNED_SHORT, (mem::size_of::<u16>() * tank.skeleton.geo_boundaries[i] as usize) as *const c_void);
+				gl::DrawElements(gl::TRIANGLES, (tank.skeleton.geo_boundaries[i + 1] - tank.skeleton.geo_boundaries[i]) as i32, gl::UNSIGNED_SHORT, (mem::size_of::<GLushort>() * tank.skeleton.geo_boundaries[i] as usize) as *const c_void);
 			}
-
-			//Render sphere
-			gl::BindVertexArray(sphere_mesh.vao);
-			gl::BindTexture(gl::TEXTURE_2D, sphere_mesh.albedo_map);
-			gl::ActiveTexture(gl::TEXTURE1);
-			gl::BindTexture(gl::TEXTURE_2D, sphere_mesh.normal_map);
-			glutil::bind_matrix4(mapped_shader, "mvp", &(clipping_from_world * sphere_matrix));
-			glutil::bind_matrix4(mapped_shader, "model_matrix", &sphere_matrix);
-			gl::DrawElements(gl::TRIANGLES, sphere_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null());
 
 			//Render tank shells
-			for opt_shell in shells.iter() {
-				if let Some(shell) = opt_shell {
-					gl::BindVertexArray(shell_mesh.vao);
-					
-					gl::ActiveTexture(gl::TEXTURE0);
-					gl::BindTexture(gl::TEXTURE_2D, shell_mesh.albedo_map);
-					gl::ActiveTexture(gl::TEXTURE1);
-					gl::BindTexture(gl::TEXTURE_2D, shell_mesh.normal_map);
+			gl::UseProgram(mapped_instanced_shader);
 
-					glutil::bind_matrix4(mapped_shader, "mvp", &(clipping_from_world * shell.transform));
-					glutil::bind_matrix4(mapped_shader, "model_matrix", &shell.transform);
+			//Set texture sampler values
+			glutil::bind_byte(mapped_instanced_shader, "albedo_map", 0);
+			glutil::bind_byte(mapped_instanced_shader, "normal_map", 1);
 
-					gl::DrawElements(gl::TRIANGLES, shell_mesh.index_count as GLsizei, gl::UNSIGNED_SHORT, ptr::null());
-				}
-			}
+			//Bind the sun direction
+			glutil::bind_vector4(mapped_instanced_shader, "sun_direction", &sun_direction);
+
+			gl::BindVertexArray(shell_mesh.vao);
+
+			gl::ActiveTexture(gl::TEXTURE0);
+			gl::BindTexture(gl::TEXTURE_2D, shell_mesh.albedo_map);
+			gl::ActiveTexture(gl::TEXTURE1);
+			gl::BindTexture(gl::TEXTURE_2D, shell_mesh.normal_map);
+
+			glutil::bind_matrix4(mapped_instanced_shader, "view_projection", &clipping_from_world);
+
+			gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
 		}
 
 		window.render_context().swap_buffers();

@@ -76,7 +76,6 @@ pub struct Shell {
     pub position: glm::TVec4<f32>,
     pub velocity: glm::TVec4<f32>,
     pub transform: glm::TMat4<f32>,
-    pub spawn_time: f32,
     pub vao: GLuint
 }
 
