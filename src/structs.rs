@@ -14,8 +14,7 @@ pub struct StaticGeometry {
 //Something too simple for a skeleton
 pub struct IndividualMesh {
     pub vao: GLuint,
-    pub albedo_map: GLuint,
-    pub normal_map: GLuint,
+    pub texture_maps: [GLuint; 3],
     pub index_count: GLint
 }
 
@@ -27,11 +26,11 @@ impl IndividualMesh {
                 let count = meshdata.geo_boundaries[1] as GLint;
                 let albedo = texture_keeper.fetch_texture(&meshdata.texture_names[0], "albedo");
                 let normal = texture_keeper.fetch_texture(&meshdata.texture_names[0], "normal");
+                let roughness = texture_keeper.fetch_texture(&meshdata.texture_names[0], "roughness");
     
                 IndividualMesh {
                     vao,
-                    albedo_map: albedo,
-                    normal_map: normal,
+                    texture_maps: [albedo, normal, roughness],
                     index_count: count as GLint
                 }
             }
@@ -49,7 +48,8 @@ pub struct Skeleton {
 	pub node_list: Vec<usize>,
 	pub geo_boundaries: Vec<u16>,			//[0, a, b, c, ..., indices.length - 1]
     pub albedo_maps: Vec<GLuint>,
-    pub normal_maps: Vec<GLuint>
+    pub normal_maps: Vec<GLuint>,
+    pub roughness_maps: Vec<GLuint>
 }
 
 //Represents a single bone in a skeleton
@@ -76,7 +76,8 @@ pub struct Shell {
     pub position: glm::TVec4<f32>,
     pub velocity: glm::TVec4<f32>,
     pub transform: glm::TMat4<f32>,
-    pub vao: GLuint
+    pub vao: GLuint,
+    pub spawn_time: f32
 }
 
 pub struct TextureKeeper {

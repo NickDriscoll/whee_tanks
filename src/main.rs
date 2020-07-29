@@ -5,7 +5,7 @@ use std::os::raw::c_void;
 use std::time::Instant;
 use glfw::{Action, Context, Key, MouseButton, WindowEvent, WindowMode};
 use gl::types::*;
-use ozy_engine::{glutil, init, routines};
+use ozy_engine::{glutil, routines};
 use ozy_engine::structs::OptionVec;
 use crate::structs::*;
 
@@ -21,8 +21,18 @@ const DEFAULT_TEX_PARAMS: [(GLenum, GLenum); 4] = [
 fn main() {
 	let mut window_size = (1920, 1080);
 	let mut aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
+	//Init glfw
+	let mut glfw = match glfw::init(glfw::FAIL_ON_ERRORS) {
+		Ok(g) => { g }
+		Err(e) => {	panic!("GLFW init error: {}", e); }
+	};
 
-	let (mut glfw, mut window, events) = init::glfw_window(window_size, WindowMode::Windowed, 4, 3, "Whee! Tanks! for ipad");
+	glfw.window_hint(glfw::WindowHint::ContextVersion(4, 3));
+	glfw.window_hint(glfw::WindowHint::OpenGlProfile(glfw::OpenGlProfileHint::Core));
+	glfw.window_hint(glfw::WindowHint::OpenGlDebugContext(true));
+
+	//Create window
+    let (mut window, events) = glfw.create_window(window_size.0, window_size.1, "Whee! Tanks! for ipad", WindowMode::Windowed).unwrap();
 
 	//Make the window non-resizable
 	window.set_resizable(false);
@@ -50,7 +60,7 @@ fn main() {
 	window.set_scroll_polling(true);
 	window.set_cursor_pos_polling(true);
 
-	//Load all OpenGL function pointers
+	//Initialize all OpenGL function pointers
 	gl::load_with(|symbol| window.get_proc_address(symbol) as *const _);
 
 	//OpenGL static configuration
@@ -62,16 +72,18 @@ fn main() {
 		gl::Enable(gl::FRAMEBUFFER_SRGB); 								//Enable automatic linear->SRGB space conversion
 		gl::Enable(gl::BLEND);											//Enable alpha blending
 		gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);			//Set blend func to (Cs * alpha + Cd * (1.0 - alpha))
-		gl::ClearColor(0.53, 0.81, 0.92, 1.0);							//Set clear color. A pleasant blue
+		gl::ClearColor(0.53, 0.81, 0.92, 1.0);							//Set the clear color to a pleasant blue
 	}
 
-	//Compile shader program
+	//Compile shader programs
 	let mapped_shader = unsafe { glutil::compile_program_from_files("shaders/mapped.vert", "shaders/mapped.frag") };
 	let mapped_instanced_shader = unsafe { glutil::compile_program_from_files("shaders/mapped_instanced.vert", "shaders/mapped.frag") };
+	let shadow_shader = unsafe { glutil::compile_program_from_files("shaders/shadow.vert", "shaders/shadow.frag") };
 
-	//Keeps track of loaded textures
+	//Initialize texture caching data structure
 	let mut texture_keeper = TextureKeeper::new();
 
+	//Array of the pieces of the map
 	let mut arena_pieces = Vec::new();
 
 	//Define the floor plane
@@ -102,12 +114,13 @@ fn main() {
 
 	//Load the tank
 	let mut turret_origin = glm::zero();
-	const TANK_SPEED: f32 = 1.5;
+	const TANK_SPEED: f32 = 2.5;
 	let mut tank = match routines::load_ozymesh("models/better_tank.ozy") {
 		Some(meshdata) => {
 			let mut node_list = Vec::with_capacity(meshdata.names.len());
 			let mut albedo_maps = Vec::with_capacity(meshdata.names.len());
 			let mut normal_maps = Vec::with_capacity(meshdata.names.len());
+			let mut roughness_maps = Vec::with_capacity(meshdata.names.len());
 			let mut node_data = Vec::new();
 
 			//Load node info
@@ -134,6 +147,10 @@ fn main() {
 				let normal_id = unsafe { texture_keeper.fetch_texture(&meshdata.texture_names[i], "normal") };
 				normal_maps.push(normal_id);
 
+				//Load roughness map
+				let roughness_id = unsafe { texture_keeper.fetch_texture(&meshdata.texture_names[i], "roughness") };
+				roughness_maps.push(roughness_id);
+
 				//Also get turret_origin
 				if meshdata.names[i] == "Turret" {
 					turret_origin = meshdata.origins[i];
@@ -151,10 +168,11 @@ fn main() {
 				node_list,
 				geo_boundaries: meshdata.geo_boundaries,
 				albedo_maps,
-				normal_maps
+				normal_maps,
+				roughness_maps
 			};
 
-			//Load the tank's gameplay data
+			//Initialize the tank's gameplay data
 			let tank_forward = glm::vec3(0.0, 0.0, 1.0);
 			let turret_forward = glm::vec3_to_vec4(&tank_forward);
 			let tank_position = glm::zero();
@@ -177,16 +195,17 @@ fn main() {
 	//Load shell graphics
 	let shell_mesh = IndividualMesh::from_ozy("models/better_shell.ozy", &mut texture_keeper);
 	
-	//Create GPU buffer for instanced positions
+	//Create GPU buffer for instanced matrices
 	let shell_instanced_buffer = unsafe {
 		gl::BindVertexArray(shell_mesh.vao);
 
 		let mut b = 0;
 		gl::GenBuffers(1, &mut b);
 		gl::BindBuffer(gl::ARRAY_BUFFER, b);
-		gl::BufferData(gl::ARRAY_BUFFER, (100 * 16 * mem::size_of::<GLfloat>()) as GLsizeiptr, ptr::null(), gl::DYNAMIC_DRAW);
+		gl::BufferData(gl::ARRAY_BUFFER, (10000 * 16 * mem::size_of::<GLfloat>()) as GLsizeiptr, ptr::null(), gl::DYNAMIC_DRAW);
 
 		//Attach this buffer to the shell_mesh vao
+		//We have to individually bind each column of the matrix as a different vec4 vertex attribute
 		for i in 0..4 {
 			gl::VertexAttribPointer(5 + i,
 									4,
@@ -201,6 +220,7 @@ fn main() {
 		b
 	};
 
+	//OptionVec of all fired tank shells
 	let mut shells: OptionVec<Shell> = OptionVec::new();
 
 	//The view-projection matrix is constant
@@ -241,7 +261,43 @@ fn main() {
 	key_bindings.insert((Key::S, Action::Release), Commands::StopMoving);
 	key_bindings.insert((Key::A, Action::Release), Commands::StopRotating);
 	key_bindings.insert((Key::D, Action::Release), Commands::StopRotating);
-	
+
+	//Initialize the shadow map
+	let (shadow_framebuffer, shadow_texture) = unsafe {
+		let mut shadow_framebuffer = 0;
+		let mut shadow_texture = 0;
+
+		gl::GenFramebuffers(1, &mut shadow_framebuffer);
+		gl::GenTextures(1, &mut shadow_texture);
+
+		//Initialize the texture
+		gl::BindTexture(gl::TEXTURE_2D, shadow_texture);
+		gl::TexImage2D(
+			gl::TEXTURE_2D,
+			0,
+			gl::DEPTH_COMPONENT as GLint,
+			1024,
+			1024,
+			0,
+			gl::RED,
+			gl::FLOAT,
+			ptr::null()
+		);
+
+		gl::BindFramebuffer(gl::FRAMEBUFFER, shadow_framebuffer);
+		gl::FramebufferTexture(
+			gl::FRAMEBUFFER,
+			gl::DEPTH_ATTACHMENT,
+			shadow_texture,
+			0
+		);
+		gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
+		(shadow_framebuffer, shadow_texture)
+	};
+
+	let shadow_from_world = glm::look_at(&glm::vec4_to_vec3(&(-sun_direction * 2.0)), &glm::zero(), &glm::vec3(0.0, 1.0, 0.0));
+	let shadow_projection = glm::ortho(-ortho_size, ortho_size, -ortho_size, ortho_size, -ortho_size, ortho_size);
+
 	//Main loop
     while !window.should_close() {
 		//Calculate time since the last frame started in seconds
@@ -283,11 +339,8 @@ fn main() {
 				}
 				Commands::ToggleWireframe => unsafe {
 					is_wireframe = !is_wireframe;
-					if is_wireframe {
-						gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE);
-					} else {
-						gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);
-					}
+					if is_wireframe { gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE); }
+					else { gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL); }
 				}
 				Commands::MoveForwards => {
 					tank.move_state = TankMoving::Forwards;
@@ -378,7 +431,8 @@ fn main() {
 				position,
 				velocity,
 				transform,
-				vao: shell_mesh.vao
+				vao: shell_mesh.vao,
+				spawn_time: elapsed_time
 			});
 		}
 		
@@ -390,6 +444,7 @@ fn main() {
 				//Update position
 				shell.position += shell.velocity * delta_time;
 
+				//Update the translation part of the transform
 				shell.transform[12] = shell.position.x;
 				shell.transform[13] = shell.position.y;
 				shell.transform[14] = shell.position.z;
@@ -402,7 +457,7 @@ fn main() {
 			}
 		}
 
-		//Update GPU buffer storing shell positions
+		//Update GPU buffer storing shell transforms
 		if shell_transforms.len() > 0 {
 			unsafe {
 				gl::BindBuffer(gl::ARRAY_BUFFER, shell_instanced_buffer);
@@ -416,7 +471,32 @@ fn main() {
 		tank.firing = false;
 
 		//-----------Rendering-----------
+		const TEXTURE_MAP_IDENTIFIERS: [&str; 3] = ["albedo_map", "normal_map", "roughness_map"];
 		unsafe {
+			//Render the shadow map first
+			gl::BindFramebuffer(gl::FRAMEBUFFER, shadow_framebuffer);
+			gl::UseProgram(shadow_shader);
+
+			//Render arena pieces
+			for piece in arena_pieces.iter() {
+				glutil::bind_matrix4(shadow_shader, "mvp", &(shadow_projection * shadow_from_world * piece.model_matrix));
+				gl::BindVertexArray(piece.vao);
+				gl::DrawElements(gl::TRIANGLES, piece.index_count, gl::UNSIGNED_SHORT, ptr::null());
+			}
+
+			//Render tank
+			gl::BindVertexArray(tank.skeleton.vao);
+			for i in 0..tank.skeleton.node_list.len() {
+				let node_index = tank.skeleton.node_list[i];
+				glutil::bind_matrix4(mapped_shader, "mvp", &(shadow_projection * shadow_from_world * tank.skeleton.node_data[node_index].transform));
+
+				gl::DrawElements(gl::TRIANGLES, (tank.skeleton.geo_boundaries[i + 1] - tank.skeleton.geo_boundaries[i]) as i32, gl::UNSIGNED_SHORT, (mem::size_of::<GLushort>() * tank.skeleton.geo_boundaries[i] as usize) as *const c_void);
+			}
+			
+
+			//Main scene rendering
+			gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
+
 			//Set the viewport
 			gl::Viewport(0, 0, window_size.0 as GLsizei, window_size.1 as GLsizei);
 			gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
@@ -425,8 +505,9 @@ fn main() {
 			gl::UseProgram(mapped_shader);
 
 			//Set texture sampler values
-			glutil::bind_byte(mapped_shader, "albedo_map", 0);
-			glutil::bind_byte(mapped_shader, "normal_map", 1);
+			for i in 0..TEXTURE_MAP_IDENTIFIERS.len() {
+				glutil::bind_byte(mapped_shader, TEXTURE_MAP_IDENTIFIERS[i], i as GLint);
+			}
 
 			//Bind the sun direction
 			glutil::bind_vector4(mapped_shader, "sun_direction", &sun_direction);
@@ -467,18 +548,21 @@ fn main() {
 			gl::UseProgram(mapped_instanced_shader);
 
 			//Set texture sampler values
-			glutil::bind_byte(mapped_instanced_shader, "albedo_map", 0);
-			glutil::bind_byte(mapped_instanced_shader, "normal_map", 1);
+			for i in 0..TEXTURE_MAP_IDENTIFIERS.len() {
+				glutil::bind_byte(mapped_instanced_shader, TEXTURE_MAP_IDENTIFIERS[i], i as GLint);
+			}
 
 			//Bind the sun direction
 			glutil::bind_vector4(mapped_instanced_shader, "sun_direction", &sun_direction);
 
+			//Bind the vertex array
 			gl::BindVertexArray(shell_mesh.vao);
 
-			gl::ActiveTexture(gl::TEXTURE0);
-			gl::BindTexture(gl::TEXTURE_2D, shell_mesh.albedo_map);
-			gl::ActiveTexture(gl::TEXTURE1);
-			gl::BindTexture(gl::TEXTURE_2D, shell_mesh.normal_map);
+			//Bind the texture maps
+			for i in 0..shell_mesh.texture_maps.len() {
+				gl::ActiveTexture(gl::TEXTURE0 + i as u32);
+				gl::BindTexture(gl::TEXTURE_2D, shell_mesh.texture_maps[i]);
+			}
 
 			glutil::bind_matrix4(mapped_instanced_shader, "view_projection", &clipping_from_world);
 
