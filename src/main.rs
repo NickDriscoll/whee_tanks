@@ -66,8 +66,7 @@ fn main() {
 	//OpenGL static configuration
 	unsafe {
 		gl::Enable(gl::DEPTH_TEST);										//Enable depth testing
-		gl::CullFace(gl::BACK);											//Cull backfaces
-		gl::Enable(gl::CULL_FACE);										//Enable said backface culling
+		gl::Enable(gl::CULL_FACE);										//Enable face culling
 		gl::DepthFunc(gl::LESS);										//Pass the fragment with the smallest z-value.
 		gl::Enable(gl::FRAMEBUFFER_SRGB); 								//Enable automatic linear->SRGB space conversion
 		gl::Enable(gl::BLEND);											//Enable alpha blending
@@ -264,7 +263,7 @@ fn main() {
 	key_bindings.insert((Key::D, Action::Release), Commands::StopRotating);
 
 	//Initialize the shadow map
-	let shadow_size = 2048;
+	let shadow_size = 4096;
 	let (shadow_framebuffer, shadow_texture) = unsafe {
 		let mut shadow_framebuffer = 0;
 		let mut shadow_texture = 0;
@@ -305,8 +304,8 @@ fn main() {
 	let shadow_from_world = glm::mat4(-1.0, 0.0, 0.0, 0.0,
 									   0.0, 1.0, 0.0, 0.0,
 									   0.0, 0.0, 1.0, 0.0,
-									   0.0, 0.0, 0.0, 1.0) * glm::look_at(&glm::vec4_to_vec3(&(sun_direction * 2.0)), &glm::zero(), &glm::vec3(0.0, 1.0, 0.0));
-	let shadow_projection = glm::ortho(-ortho_size * 2.0, ortho_size * 2.0, -ortho_size * 2.0, ortho_size * 2.0, -ortho_size * 2.0, ortho_size * 2.0);
+									   0.0, 0.0, 0.0, 1.0) * glm::look_at(&glm::vec4_to_vec3(&(sun_direction * 4.0)), &glm::zero(), &glm::vec3(0.0, 1.0, 0.0));
+	let shadow_projection = glm::ortho(-ortho_size * 2.0, ortho_size * 2.0, -ortho_size * 2.0, ortho_size * 2.0, -ortho_size, ortho_size * 3.0);
 
 	//Main loop
     while !window.should_close() {
@@ -485,6 +484,7 @@ fn main() {
 		unsafe {
 			//Render the shadow map first
 			gl::BindFramebuffer(gl::FRAMEBUFFER, shadow_framebuffer);
+			gl::CullFace(gl::FRONT);
 			gl::Clear(gl::DEPTH_BUFFER_BIT);
 			gl::Viewport(0, 0, shadow_size, shadow_size);
 			gl::UseProgram(shadow_shader);
@@ -513,6 +513,7 @@ fn main() {
 
 			//Main scene rendering
 			gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
+			gl::CullFace(gl::BACK);
 
 			//Set the viewport
 			gl::Viewport(0, 0, window_size.0 as GLsizei, window_size.1 as GLsizei);
