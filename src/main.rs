@@ -79,6 +79,7 @@ fn main() {
 	let mapped_shader = unsafe { glutil::compile_program_from_files("shaders/mapped.vert", "shaders/mapped.frag") };
 	let mapped_instanced_shader = unsafe { glutil::compile_program_from_files("shaders/mapped_instanced.vert", "shaders/mapped.frag") };
 	let shadow_shader = unsafe { glutil::compile_program_from_files("shaders/shadow.vert", "shaders/shadow.frag") };
+	let shadow_shader_instanced = unsafe { glutil::compile_program_from_files("shaders/shadow_instanced.vert", "shaders/shadow.frag") };
 
 	//Initialize texture caching data structure
 	let mut texture_keeper = TextureKeeper::new();
@@ -263,6 +264,7 @@ fn main() {
 	key_bindings.insert((Key::D, Action::Release), Commands::StopRotating);
 
 	//Initialize the shadow map
+	let shadow_size = 2048;
 	let (shadow_framebuffer, shadow_texture) = unsafe {
 		let mut shadow_framebuffer = 0;
 		let mut shadow_texture = 0;
@@ -276,18 +278,23 @@ fn main() {
 			gl::TEXTURE_2D,
 			0,
 			gl::DEPTH_COMPONENT as GLint,
-			1024,
-			1024,
+			shadow_size,
+			shadow_size,
 			0,
-			gl::RED,
+			gl::DEPTH_COMPONENT,
 			gl::FLOAT,
 			ptr::null()
 		);
+		gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
+		gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
+		gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::REPEAT as i32);
+		gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::REPEAT as i32);
 
 		gl::BindFramebuffer(gl::FRAMEBUFFER, shadow_framebuffer);
-		gl::FramebufferTexture(
+		gl::FramebufferTexture2D(
 			gl::FRAMEBUFFER,
 			gl::DEPTH_ATTACHMENT,
+			gl::TEXTURE_2D,
 			shadow_texture,
 			0
 		);
@@ -295,8 +302,11 @@ fn main() {
 		(shadow_framebuffer, shadow_texture)
 	};
 
-	let shadow_from_world = glm::look_at(&glm::vec4_to_vec3(&(-sun_direction * 2.0)), &glm::zero(), &glm::vec3(0.0, 1.0, 0.0));
-	let shadow_projection = glm::ortho(-ortho_size, ortho_size, -ortho_size, ortho_size, -ortho_size, ortho_size);
+	let shadow_from_world = glm::mat4(-1.0, 0.0, 0.0, 0.0,
+									   0.0, 1.0, 0.0, 0.0,
+									   0.0, 0.0, 1.0, 0.0,
+									   0.0, 0.0, 0.0, 1.0) * glm::look_at(&glm::vec4_to_vec3(&(sun_direction * 2.0)), &glm::zero(), &glm::vec3(0.0, 1.0, 0.0));
+	let shadow_projection = glm::ortho(-ortho_size * 2.0, ortho_size * 2.0, -ortho_size * 2.0, ortho_size * 2.0, -ortho_size * 2.0, ortho_size * 2.0);
 
 	//Main loop
     while !window.should_close() {
@@ -471,10 +481,12 @@ fn main() {
 		tank.firing = false;
 
 		//-----------Rendering-----------
-		const TEXTURE_MAP_IDENTIFIERS: [&str; 3] = ["albedo_map", "normal_map", "roughness_map"];
+		const TEXTURE_MAP_IDENTIFIERS: [&str; 4] = ["albedo_map", "normal_map", "roughness_map", "shadow_map"];
 		unsafe {
 			//Render the shadow map first
 			gl::BindFramebuffer(gl::FRAMEBUFFER, shadow_framebuffer);
+			gl::Clear(gl::DEPTH_BUFFER_BIT);
+			gl::Viewport(0, 0, shadow_size, shadow_size);
 			gl::UseProgram(shadow_shader);
 
 			//Render arena pieces
@@ -488,11 +500,16 @@ fn main() {
 			gl::BindVertexArray(tank.skeleton.vao);
 			for i in 0..tank.skeleton.node_list.len() {
 				let node_index = tank.skeleton.node_list[i];
-				glutil::bind_matrix4(mapped_shader, "mvp", &(shadow_projection * shadow_from_world * tank.skeleton.node_data[node_index].transform));
+				glutil::bind_matrix4(shadow_shader, "mvp", &(shadow_projection * shadow_from_world * tank.skeleton.node_data[node_index].transform));
 
 				gl::DrawElements(gl::TRIANGLES, (tank.skeleton.geo_boundaries[i + 1] - tank.skeleton.geo_boundaries[i]) as i32, gl::UNSIGNED_SHORT, (mem::size_of::<GLushort>() * tank.skeleton.geo_boundaries[i] as usize) as *const c_void);
 			}
-			
+
+			//Render shells
+			gl::UseProgram(shadow_shader_instanced);
+			gl::BindVertexArray(shell_mesh.vao);
+			glutil::bind_matrix4(shadow_shader_instanced, "view_projection", &(shadow_projection * shadow_from_world));
+			gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
 
 			//Main scene rendering
 			gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
@@ -508,6 +525,11 @@ fn main() {
 			for i in 0..TEXTURE_MAP_IDENTIFIERS.len() {
 				glutil::bind_byte(mapped_shader, TEXTURE_MAP_IDENTIFIERS[i], i as GLint);
 			}
+
+			//Bind the shadow map's data
+			gl::ActiveTexture(gl::TEXTURE3);
+			gl::BindTexture(gl::TEXTURE_2D, shadow_texture);
+			glutil::bind_matrix4(mapped_shader, "shadow_matrix", &(shadow_projection * shadow_from_world));
 
 			//Bind the sun direction
 			glutil::bind_vector4(mapped_shader, "sun_direction", &sun_direction);
@@ -536,6 +558,8 @@ fn main() {
 				gl::BindTexture(gl::TEXTURE_2D, tank.skeleton.albedo_maps[i]);
 				gl::ActiveTexture(gl::TEXTURE1);
 				gl::BindTexture(gl::TEXTURE_2D, tank.skeleton.normal_maps[i]);
+				gl::ActiveTexture(gl::TEXTURE2);
+				gl::BindTexture(gl::TEXTURE_2D, tank.skeleton.roughness_maps[i]);
 
 				let node_index = tank.skeleton.node_list[i];
 				glutil::bind_matrix4(mapped_shader, "mvp", &(clipping_from_world * tank.skeleton.node_data[node_index].transform));
@@ -551,6 +575,11 @@ fn main() {
 			for i in 0..TEXTURE_MAP_IDENTIFIERS.len() {
 				glutil::bind_byte(mapped_instanced_shader, TEXTURE_MAP_IDENTIFIERS[i], i as GLint);
 			}
+
+			//Bind the shadow map's data
+			gl::ActiveTexture(gl::TEXTURE3);
+			gl::BindTexture(gl::TEXTURE_2D, shadow_texture);
+			glutil::bind_matrix4(mapped_shader, "shadow_matrix", &(shadow_projection * shadow_from_world));
 
 			//Bind the sun direction
 			glutil::bind_vector4(mapped_instanced_shader, "sun_direction", &sun_direction);
