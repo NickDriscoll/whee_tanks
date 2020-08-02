@@ -18,6 +18,20 @@ const DEFAULT_TEX_PARAMS: [(GLenum, GLenum); 4] = [
 	(gl::TEXTURE_MAG_FILTER, gl::LINEAR)
 ];
 
+//Binds each texture map specified in maps to each texture mapping unit in order
+unsafe fn bind_texture_maps(maps: &[GLuint]) {
+	for i in 0..maps.len() {
+		gl::ActiveTexture(gl::TEXTURE0 + i as GLenum);
+		gl::BindTexture(gl::TEXTURE_2D, maps[i]);
+	}
+}
+
+unsafe fn initialize_texture_samplers(program: GLuint, identifiers: &[&str]) {
+	for i in 0..identifiers.len() {
+		glutil::bind_byte(program, identifiers[i], i as GLint);
+	}
+}
+
 fn main() {
 	let mut window_size = (1920, 1080);
 	let mut aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
@@ -74,6 +88,14 @@ fn main() {
 		gl::ClearColor(0.53, 0.81, 0.92, 1.0);							//Set the clear color to a pleasant blue
 	}
 
+	//Define the default framebuffer
+	let default_framebuffer = Framebuffer {
+		name: 0,
+		size: (window_size.0 as GLsizei, window_size.1 as GLsizei),
+		clear_flags: gl::DEPTH_BUFFER_BIT | gl::COLOR_BUFFER_BIT,
+		cull_face: gl::BACK
+	};
+
 	//Compile shader programs
 	let mapped_shader = unsafe { glutil::compile_program_from_files("shaders/mapped.vert", "shaders/mapped.frag") };
 	let mapped_instanced_shader = unsafe { glutil::compile_program_from_files("shaders/mapped_instanced.vert", "shaders/mapped.frag") };
@@ -87,15 +109,23 @@ fn main() {
 	let mut arena_pieces = Vec::new();
 
 	//Define the floor plane
-	unsafe {
+	let floor_index = unsafe {
 		let arena_ratio = 16.0 / 9.0;
 		let tex_scale = 2.0;
+		let scale = 5.0;
 		let vertices = [
-			//Positions							Tangents					Bitangents				Normals							Texture coordinates
-			-4.5*arena_ratio, 0.0, -5.0,		1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					0.0, 0.0,
-			4.5*arena_ratio, 0.0, -5.0,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					tex_scale*arena_ratio, 0.0,
-			-4.5*arena_ratio, 0.0, 5.0,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					0.0, tex_scale,
-			4.5*arena_ratio, 0.0, 5.0,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					tex_scale*arena_ratio, tex_scale
+			//Positions										Tangents					Bitangents				Normals							Texture coordinates
+			-4.5*arena_ratio*scale, 0.0, -5.0*scale,		1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					0.0, 0.0,
+			4.5*arena_ratio*scale, 0.0, -5.0*scale,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					tex_scale*arena_ratio*scale, 0.0,
+			-4.5*arena_ratio*scale, 0.0, 5.0*scale,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					0.0, tex_scale*scale,
+			4.5*arena_ratio*scale, 0.0, 5.0*scale,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					tex_scale*arena_ratio*scale, tex_scale*scale
+		];
+		let vertices = [
+			//Positions					Tangents					Bitangents				Normals							Texture coordinates
+			-scale, 0.0, -scale,		1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					0.0, 0.0,
+			scale, 0.0, -scale,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					scale, 0.0,
+			-scale, 0.0, scale,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					0.0, scale,
+			scale, 0.0, scale,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					scale, scale
 		];
 		let indices = [
 			0u16, 1, 2,
@@ -110,6 +140,7 @@ fn main() {
 			index_count: indices.len() as GLsizei
 		};
 		arena_pieces.push(piece);
+		arena_pieces.len() - 1
 	};
 
 	//Load the tank
@@ -230,7 +261,7 @@ fn main() {
 								0.0, 0.0, 0.0, 1.0) * glm::look_at(&glm::vec3(0.0, 1.5, -1.0), &glm::vec3(0.0, 0.0, 0.0), &glm::vec3(0.0, 1.0, 0.0));
 	let world_from_view = glm::affine_inverse(view_from_world);
 	let ortho_size = 5.0;
-	let clipping_from_view = glm::ortho(-ortho_size*aspect_ratio, ortho_size*aspect_ratio, -ortho_size, ortho_size, -ortho_size, ortho_size);
+	let clipping_from_view = glm::ortho(-ortho_size*aspect_ratio, ortho_size*aspect_ratio, -ortho_size, ortho_size, -ortho_size, ortho_size * 2.0);
 	let clipping_from_world = clipping_from_view * view_from_world;
 	let world_from_clipping = glm::affine_inverse(clipping_from_world);
 
@@ -298,14 +329,21 @@ fn main() {
 			0
 		);
 		gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
-		(shadow_framebuffer, shadow_texture)
+
+		let framebuffer = Framebuffer {
+			name: shadow_framebuffer,
+			size: (shadow_size, shadow_size),
+			clear_flags: gl::DEPTH_BUFFER_BIT,
+			cull_face: gl::FRONT
+		};
+		(framebuffer, shadow_texture)
 	};
 
 	let shadow_from_world = glm::mat4(-1.0, 0.0, 0.0, 0.0,
 									   0.0, 1.0, 0.0, 0.0,
 									   0.0, 0.0, 1.0, 0.0,
 									   0.0, 0.0, 0.0, 1.0) * glm::look_at(&glm::vec4_to_vec3(&(sun_direction * 4.0)), &glm::zero(), &glm::vec3(0.0, 1.0, 0.0));
-	let shadow_projection = glm::ortho(-ortho_size * 2.0, ortho_size * 2.0, -ortho_size * 2.0, ortho_size * 2.0, -ortho_size, ortho_size * 3.0);
+	let shadow_projection = glm::ortho(-ortho_size * 2.0, ortho_size * 2.0, -ortho_size * 2.0, ortho_size * 2.0, -ortho_size, ortho_size * 3.0);	
 
 	//Main loop
     while !window.should_close() {
@@ -376,6 +414,9 @@ fn main() {
 		}
 
 		//-----------Simulating-----------
+
+		//Move the floor
+		arena_pieces[0].model_matrix = glm::translation(&glm::vec3(0.0, 0.0, 2.0*f32::sin(elapsed_time)));
 
 		//Update the tank's position
 		match tank.move_state {
@@ -482,17 +523,16 @@ fn main() {
 		//-----------Rendering-----------
 		const TEXTURE_MAP_IDENTIFIERS: [&str; 4] = ["albedo_map", "normal_map", "roughness_map", "shadow_map"];
 		unsafe {
-			//Render the shadow map first
-			gl::BindFramebuffer(gl::FRAMEBUFFER, shadow_framebuffer);
-			gl::CullFace(gl::FRONT);
-			gl::Clear(gl::DEPTH_BUFFER_BIT);
-			gl::Viewport(0, 0, shadow_size, shadow_size);
+			//Bind shadow framebuffer
+			shadow_framebuffer.bind();
+
+			//Bind shadow program
 			gl::UseProgram(shadow_shader);
 
 			//Render arena pieces
 			for piece in arena_pieces.iter() {
-				glutil::bind_matrix4(shadow_shader, "mvp", &(shadow_projection * shadow_from_world * piece.model_matrix));
 				gl::BindVertexArray(piece.vao);
+				glutil::bind_matrix4(shadow_shader, "mvp", &(shadow_projection * shadow_from_world * piece.model_matrix));
 				gl::DrawElements(gl::TRIANGLES, piece.index_count, gl::UNSIGNED_SHORT, ptr::null());
 			}
 
@@ -512,41 +552,23 @@ fn main() {
 			gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
 
 			//Main scene rendering
-			gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
-			gl::CullFace(gl::BACK);
-
-			//Set the viewport
-			gl::Viewport(0, 0, window_size.0 as GLsizei, window_size.1 as GLsizei);
-			gl::Clear(gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT);
+			default_framebuffer.bind();
 
 			//Bind the GLSL program
 			gl::UseProgram(mapped_shader);
 
-			//Set texture sampler values
-			for i in 0..TEXTURE_MAP_IDENTIFIERS.len() {
-				glutil::bind_byte(mapped_shader, TEXTURE_MAP_IDENTIFIERS[i], i as GLint);
-			}
-
-			//Bind the shadow map's data
+			//Set uniforms that are constant for the lifetime of the program
+			initialize_texture_samplers(mapped_shader, &TEXTURE_MAP_IDENTIFIERS);
+			glutil::bind_matrix4(mapped_shader, "shadow_matrix", &(shadow_projection * shadow_from_world));
+			glutil::bind_vector4(mapped_shader, "sun_direction", &sun_direction);
 			gl::ActiveTexture(gl::TEXTURE3);
 			gl::BindTexture(gl::TEXTURE_2D, shadow_texture);
-			glutil::bind_matrix4(mapped_shader, "shadow_matrix", &(shadow_projection * shadow_from_world));
-
-			//Bind the sun direction
-			glutil::bind_vector4(mapped_shader, "sun_direction", &sun_direction);
 
 			//Render static pieces of the arena
 			for piece in arena_pieces.iter() {
-				glutil::bind_matrix4(mapped_shader, "mvp", &(clipping_from_view * view_from_world * piece.model_matrix));
+				glutil::bind_matrix4(mapped_shader, "mvp", &(clipping_from_world * piece.model_matrix));
 				glutil::bind_matrix4(mapped_shader, "model_matrix", &piece.model_matrix);
-
-				//Albedo map
-				gl::ActiveTexture(gl::TEXTURE0);
-				gl::BindTexture(gl::TEXTURE_2D, piece.albedo);
-
-				//Normal map
-				gl::ActiveTexture(gl::TEXTURE1);
-				gl::BindTexture(gl::TEXTURE_2D, piece.normal);
+				bind_texture_maps(&[piece.albedo, piece.normal]);
 
 				gl::BindVertexArray(piece.vao);
 				gl::DrawElements(gl::TRIANGLES, piece.index_count, gl::UNSIGNED_SHORT, ptr::null());
@@ -555,16 +577,10 @@ fn main() {
 			//Render the tank
 			gl::BindVertexArray(tank.skeleton.vao);
 			for i in 0..tank.skeleton.node_list.len() {
-				gl::ActiveTexture(gl::TEXTURE0);
-				gl::BindTexture(gl::TEXTURE_2D, tank.skeleton.albedo_maps[i]);
-				gl::ActiveTexture(gl::TEXTURE1);
-				gl::BindTexture(gl::TEXTURE_2D, tank.skeleton.normal_maps[i]);
-				gl::ActiveTexture(gl::TEXTURE2);
-				gl::BindTexture(gl::TEXTURE_2D, tank.skeleton.roughness_maps[i]);
-
 				let node_index = tank.skeleton.node_list[i];
 				glutil::bind_matrix4(mapped_shader, "mvp", &(clipping_from_world * tank.skeleton.node_data[node_index].transform));
 				glutil::bind_matrix4(mapped_shader, "model_matrix", &tank.skeleton.node_data[node_index].transform);
+				bind_texture_maps(&[tank.skeleton.albedo_maps[i], tank.skeleton.normal_maps[i], tank.skeleton.roughness_maps[i]]);
 
 				gl::DrawElements(gl::TRIANGLES, (tank.skeleton.geo_boundaries[i + 1] - tank.skeleton.geo_boundaries[i]) as i32, gl::UNSIGNED_SHORT, (mem::size_of::<GLushort>() * tank.skeleton.geo_boundaries[i] as usize) as *const c_void);
 			}
@@ -573,17 +589,13 @@ fn main() {
 			gl::UseProgram(mapped_instanced_shader);
 
 			//Set texture sampler values
-			for i in 0..TEXTURE_MAP_IDENTIFIERS.len() {
-				glutil::bind_byte(mapped_instanced_shader, TEXTURE_MAP_IDENTIFIERS[i], i as GLint);
-			}
+			initialize_texture_samplers(mapped_instanced_shader, &TEXTURE_MAP_IDENTIFIERS);
+			glutil::bind_matrix4(mapped_shader, "shadow_matrix", &(shadow_projection * shadow_from_world));
+			glutil::bind_vector4(mapped_instanced_shader, "sun_direction", &sun_direction);
 
 			//Bind the shadow map's data
 			gl::ActiveTexture(gl::TEXTURE3);
 			gl::BindTexture(gl::TEXTURE_2D, shadow_texture);
-			glutil::bind_matrix4(mapped_shader, "shadow_matrix", &(shadow_projection * shadow_from_world));
-
-			//Bind the sun direction
-			glutil::bind_vector4(mapped_instanced_shader, "sun_direction", &sun_direction);
 
 			//Bind the vertex array
 			gl::BindVertexArray(shell_mesh.vao);

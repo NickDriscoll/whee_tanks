@@ -107,6 +107,22 @@ impl TextureKeeper {
     }
 }
 
+pub struct Framebuffer {
+    pub name: GLuint,
+    pub size: (GLsizei, GLsizei),
+    pub clear_flags: GLenum,
+    pub cull_face: GLenum
+}
+
+impl Framebuffer {
+    pub unsafe fn bind(&self) {
+        gl::BindFramebuffer(gl::FRAMEBUFFER, self.name);
+        gl::Viewport(0, 0, self.size.0, self.size.1);
+        gl::Clear(self.clear_flags);
+        gl::CullFace(self.cull_face);
+    }
+}
+
 pub enum TankMoving {
     Forwards,
     Backwards,
