@@ -5,6 +5,7 @@ use std::os::raw::c_void;
 use std::time::Instant;
 use glfw::{Action, Context, Key, MouseButton, WindowEvent, WindowMode};
 use gl::types::*;
+use glyph_brush::{ab_glyph::FontArc, BrushAction, BrushError, GlyphBrushBuilder, GlyphCruncher, Section, Text};
 use ozy_engine::{glutil, routines};
 use ozy_engine::structs::OptionVec;
 use crate::structs::*;
@@ -101,6 +102,7 @@ fn main() {
 	let mapped_instanced_shader = unsafe { glutil::compile_program_from_files("shaders/mapped_instanced.vert", "shaders/mapped.frag") };
 	let shadow_shader = unsafe { glutil::compile_program_from_files("shaders/shadow.vert", "shaders/shadow.frag") };
 	let shadow_shader_instanced = unsafe { glutil::compile_program_from_files("shaders/shadow_instanced.vert", "shaders/shadow.frag") };
+	let glyph_shader = unsafe { glutil::compile_program_from_files("shaders/glyph.vert", "shaders/glyph.frag") };
 
 	//Initialize texture caching data structure
 	let mut texture_keeper = TextureKeeper::new();
@@ -111,21 +113,14 @@ fn main() {
 	//Define the floor plane
 	let floor_index = unsafe {
 		let arena_ratio = 16.0 / 9.0;
-		let tex_scale = 2.0;
-		let scale = 5.0;
+		let tex_scale = 3.0;
+		let scale = 2.0;
 		let vertices = [
 			//Positions										Tangents					Bitangents				Normals							Texture coordinates
 			-4.5*arena_ratio*scale, 0.0, -5.0*scale,		1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					0.0, 0.0,
 			4.5*arena_ratio*scale, 0.0, -5.0*scale,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					tex_scale*arena_ratio*scale, 0.0,
 			-4.5*arena_ratio*scale, 0.0, 5.0*scale,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					0.0, tex_scale*scale,
 			4.5*arena_ratio*scale, 0.0, 5.0*scale,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					tex_scale*arena_ratio*scale, tex_scale*scale
-		];
-		let vertices = [
-			//Positions					Tangents					Bitangents				Normals							Texture coordinates
-			-scale, 0.0, -scale,		1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					0.0, 0.0,
-			scale, 0.0, -scale,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					scale, 0.0,
-			-scale, 0.0, scale,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					0.0, scale,
-			scale, 0.0, scale,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					scale, scale
 		];
 		let indices = [
 			0u16, 1, 2,
@@ -343,7 +338,38 @@ fn main() {
 									   0.0, 1.0, 0.0, 0.0,
 									   0.0, 0.0, 1.0, 0.0,
 									   0.0, 0.0, 0.0, 1.0) * glm::look_at(&glm::vec4_to_vec3(&(sun_direction * 4.0)), &glm::zero(), &glm::vec3(0.0, 1.0, 0.0));
-	let shadow_projection = glm::ortho(-ortho_size * 2.0, ortho_size * 2.0, -ortho_size * 2.0, ortho_size * 2.0, -ortho_size, ortho_size * 3.0);	
+	let shadow_projection = glm::ortho(-ortho_size * 2.0, ortho_size * 2.0, -ortho_size * 2.0, ortho_size * 2.0, -ortho_size, ortho_size * 3.0);
+
+	let font = match FontArc::try_from_slice(include_bytes!("../fonts/Constantia.ttf")) {
+		Ok(s) => { s }
+		Err(e) => { panic!("{}", e) }
+	};
+	let mut glyph_brush = GlyphBrushBuilder::using_font(font).build();
+
+	//Create the glyph texture
+	let glyph_texture = unsafe {
+		let (width, height) = glyph_brush.texture_dimensions();
+		let mut tex = 0;
+		gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
+		gl::GenTextures(1, &mut tex);
+		gl::BindTexture(gl::TEXTURE_2D, tex);
+		gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as _);
+		gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as _);
+		gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as _);
+		gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as _);
+		gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RED as GLint, width as GLint, height as GLint, 0, gl::RED, gl::UNSIGNED_BYTE, ptr::null());
+		tex
+	};
+
+	//Initialize glyph vao
+	let mut glyph_vao = None;
+	let mut glyph_count = 0;
+	let clipping_from_screen = glm::mat4(
+		2.0 / window_size.0 as f32, 0.0, 0.0, -1.0,
+		0.0, -(2.0 / window_size.1 as f32), 0.0, 1.0,
+		0.0, 0.0, 1.0, 0.0,
+		0.0, 0.0, 0.0, 1.0
+	);
 
 	//Main loop
     while !window.should_close() {
@@ -415,9 +441,6 @@ fn main() {
 
 		//-----------Simulating-----------
 
-		//Move the floor
-		arena_pieces[0].model_matrix = glm::translation(&glm::vec3(0.0, 0.0, 2.0*f32::sin(elapsed_time)));
-
 		//Update the tank's position
 		match tank.move_state {
 			TankMoving::Forwards => {
@@ -469,8 +492,6 @@ fn main() {
 					) * glm::affine_inverse(tank_rotation)
 		};
 
-		//--------------------Shell update section--------------------
-
 		//Fire a shell if the mouse was clicked this frame
 		if tank.firing {
 			let transform = tank.skeleton.node_data[1].transform;
@@ -519,6 +540,81 @@ fn main() {
 			}
 		}
 		tank.firing = false;
+
+		//Update text
+		let mut section = Section::new();
+		section.screen_position = (20.0, 20.0);
+		let section = section.add_text(Text::new("Please work").with_color([1.0, 1.0, 1.0, 1.0]));
+		glyph_brush.queue(section);
+
+		//glyph_brush processing
+		match glyph_brush.process_queued(|rect, tex_data| unsafe {
+			gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
+			gl::TextureSubImage2D(
+				glyph_texture,
+				0,
+				rect.min[0] as _,
+				rect.min[1] as _,
+				rect.width() as _,
+				rect.height() as _,
+				gl::RED,
+				gl::UNSIGNED_BYTE,
+				tex_data.as_ptr() as _
+			);
+		}, |vertex| {
+			let left = vertex.pixel_coords.min.x as f32;
+			let right = vertex.pixel_coords.max.x as f32;
+			let top = vertex.pixel_coords.min.y as f32;
+			let bottom = vertex.pixel_coords.max.y as f32;
+			let texleft = vertex.tex_coords.min.x;
+			let texright = vertex.tex_coords.max.x;
+			let textop = vertex.tex_coords.min.y;
+			let texbottom = vertex.tex_coords.max.y;
+
+			//We need to return four vertices
+			[
+				left, bottom, texleft, texbottom,
+				right, bottom, texright, texbottom,
+				left, top, texleft, textop,
+				right, top, texright, textop
+			]
+		}) {
+			Ok(BrushAction::Draw(verts)) => {
+				let mut vertex_buffer = Vec::with_capacity(verts.len() * 16);
+				let mut index_buffer = vec![0; verts.len() * 6];
+				for vert in verts.iter() {
+					for v in vert {
+						vertex_buffer.push(*v);
+					}
+				}
+				glyph_count = verts.len();
+
+				for i in 0..verts.len() {
+					index_buffer[i * 6] = 4 * i as u16;
+					index_buffer[i * 6 + 1] = index_buffer[i * 6] + 1;
+					index_buffer[i * 6 + 2] = index_buffer[i * 6] + 2;
+					index_buffer[i * 6 + 3] = index_buffer[i * 6] + 3;
+					index_buffer[i * 6 + 4] = index_buffer[i * 6] + 2;
+					index_buffer[i * 6 + 5] = index_buffer[i * 6] + 1;
+				}
+
+				match glyph_vao {
+					Some(mut vao) => unsafe {						
+						gl::DeleteVertexArrays(1, &mut vao);
+						glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &[2, 2]));
+					}
+					None => unsafe {
+						glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &[2, 2]));
+					}
+				}
+			}
+			Ok(BrushAction::ReDraw) => {
+
+			}
+			Err(BrushError::TextureTooSmall { suggested }) => {
+				
+			}
+		}
 
 		//-----------Rendering-----------
 		const TEXTURE_MAP_IDENTIFIERS: [&str; 4] = ["albedo_map", "normal_map", "roughness_map", "shadow_map"];
@@ -602,13 +698,22 @@ fn main() {
 
 			//Bind the texture maps
 			for i in 0..shell_mesh.texture_maps.len() {
-				gl::ActiveTexture(gl::TEXTURE0 + i as u32);
+				gl::ActiveTexture(gl::TEXTURE0 + i as GLenum);
 				gl::BindTexture(gl::TEXTURE_2D, shell_mesh.texture_maps[i]);
 			}
-
 			glutil::bind_matrix4(mapped_instanced_shader, "view_projection", &clipping_from_world);
-
 			gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
+
+			//Render text
+			if let Some(vao) = glyph_vao {
+				gl::UseProgram(glyph_shader);
+				glutil::bind_matrix4(glyph_shader, "clipping_from_screen", &clipping_from_screen);
+				initialize_texture_samplers(glyph_shader, &["glyph_texture"]);
+				gl::ActiveTexture(gl::TEXTURE0);
+				gl::BindTexture(gl::TEXTURE_2D, glyph_texture);
+				gl::BindVertexArray(vao);
+				gl::DrawElements(gl::TRIANGLES, 6 * glyph_count as GLint, gl::UNSIGNED_SHORT, ptr::null());
+			}
 		}
 
 		window.render_context().swap_buffers();

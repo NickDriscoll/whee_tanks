@@ -12,3 +12,4 @@ ozy_engine = { path = "../ozy_engine" }
 glfw = "0.32.0"
 gl = "0.10.0"
 nalgebra-glm = "*"
+glyph_brush = "0.7.0"
