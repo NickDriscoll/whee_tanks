@@ -544,7 +544,20 @@ fn main() {
 		//Update text
 		let mut section = Section::new();
 		section.screen_position = (20.0, 20.0);
-		let section = section.add_text(Text::new("Please work").with_color([1.0, 1.0, 1.0, 1.0]));
+		let section = section.add_text(Text::new("I met a traveller from an antique land,
+		Who said—“Two vast and trunkless legs of stone
+		Stand in the desert. . . . Near them, on the sand,
+		Half sunk a shattered visage lies, whose frown,
+		And wrinkled lip, and sneer of cold command,
+		Tell that its sculptor well those passions read
+		Which yet survive, stamped on these lifeless things,
+		The hand that mocked them, and the heart that fed;
+		And on the pedestal, these words appear:
+		My name is Ozymandias, King of Kings;
+		Look on my Works, ye Mighty, and despair!
+		Nothing beside remains. Round the decay
+		Of that colossal Wreck, boundless and bare
+		The lone and level sands stretch far away.”").with_color([1.0, 1.0, 1.0, 1.0]));
 		glyph_brush.queue(section);
 
 		//glyph_brush processing
@@ -703,6 +716,9 @@ fn main() {
 			}
 			glutil::bind_matrix4(mapped_instanced_shader, "view_projection", &clipping_from_world);
 			gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
+
+			//Clear the depth buffer before rendering 2D elements
+			gl::Clear(gl::DEPTH_BUFFER_BIT);
 
 			//Render text
 			if let Some(vao) = glyph_vao {
