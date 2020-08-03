@@ -5,7 +5,7 @@ use std::os::raw::c_void;
 use std::time::Instant;
 use glfw::{Action, Context, Key, MouseButton, WindowEvent, WindowMode};
 use gl::types::*;
-use glyph_brush::{ab_glyph::FontArc, BrushAction, BrushError, GlyphBrushBuilder, GlyphCruncher, Section, Text};
+use glyph_brush::{ab_glyph::{FontArc, PxScale}, BrushAction, BrushError, GlyphBrushBuilder, GlyphCruncher, Section, Text};
 use ozy_engine::{glutil, routines};
 use ozy_engine::structs::OptionVec;
 use crate::structs::*;
@@ -33,6 +33,60 @@ unsafe fn initialize_texture_samplers(program: GLuint, identifiers: &[&str]) {
 	}
 }
 
+extern "system" fn gl_debug_callback(source: GLenum, gltype: GLenum, id: GLuint, severity: GLenum, length: GLsizei, message: *const GLchar, user_param: *mut c_void) {
+	println!("--------------------OpenGL debug message--------------------");
+	println!("ID: {}", id);
+	
+	match source {
+		gl::DEBUG_SOURCE_API => 				{ println!("Source: API"); }
+		gl::DEBUG_SOURCE_WINDOW_SYSTEM => 		{ println!("Source: Window System"); }
+		gl::DEBUG_SOURCE_SHADER_COMPILER => 	{ println!("Source: Shader Compiler"); }
+		gl::DEBUG_SOURCE_THIRD_PARTY => 		{ println!("Source: Third Party"); }
+		gl::DEBUG_SOURCE_APPLICATION => 		{ println!("Source: Application"); }
+		gl::DEBUG_SOURCE_OTHER => 				{ println!("Source: Other"); }
+		_ => {}
+	}
+
+	match gltype {
+		gl::DEBUG_TYPE_ERROR => 					{ println!("Type: Error") }
+		gl::DEBUG_TYPE_DEPRECATED_BEHAVIOR => 		{ println!("Type: Deprecated Behaviour") }
+		gl::DEBUG_TYPE_UNDEFINED_BEHAVIOR => 		{ println!("Type: Undefined Behaviour") }
+		gl::DEBUG_TYPE_PORTABILITY => 				{ println!("Type: Portability") }
+		gl::DEBUG_TYPE_PERFORMANCE => 				{ println!("Type: Performance") }
+		gl::DEBUG_TYPE_MARKER => 					{ println!("Type: Marker") }
+		gl::DEBUG_TYPE_PUSH_GROUP => 				{ println!("Type: Push Group") }
+		gl::DEBUG_TYPE_POP_GROUP => 				{ println!("Type: Pop Group") }
+		gl::DEBUG_TYPE_OTHER => 					{ println!("Type: Other") }
+		_ => {}
+	}
+
+	match severity {
+		gl::DEBUG_SEVERITY_HIGH => { 
+			println!("Severity: High"); 
+		}
+		gl::DEBUG_SEVERITY_MEDIUM => { 
+			println!("Severity: Medium"); 
+	}
+		gl::DEBUG_SEVERITY_LOW => { 
+			println!("Severity: Low"); 
+		}
+		gl::DEBUG_SEVERITY_NOTIFICATION => { 
+			println!("Severity: Notification"); 
+		}
+		_ => {}
+	}
+
+	let m = unsafe {
+		let mut buffer = vec![0; length as usize];
+		for i in 0..length as isize {
+			buffer[i as usize] = *message.offset(i) as u8;
+		}
+		String::from_utf8(buffer).unwrap()
+	};
+
+	println!("Message: {}", m);
+}
+
 fn main() {
 	let mut window_size = (1920, 1080);
 	let mut aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
@@ -55,16 +109,16 @@ fn main() {
 	//Make the window fullscreen
 	/*
 	glfw.with_primary_monitor_mut(|_, opt_monitor| {
-		if let Some(monitor) = opt_monitor {
-			let window_mode = WindowMode::FullScreen(monitor);
-			let pos = monitor.get_pos();
-			if let Some(mode) = monitor.get_video_mode() {
-				window_size = (mode.width, mode.height);
-				aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
-				window.set_size(window_size.0 as i32, window_size.1 as i32);
-				window.set_monitor(window_mode, pos.0, pos.1, window_size.0, window_size.1, Some(144));
+			if let Some(monitor) = opt_monitor {
+				let window_mode = WindowMode::FullScreen(monitor);
+				let pos = monitor.get_pos();
+				if let Some(mode) = monitor.get_video_mode() {
+					window_size = (mode.width, mode.height);
+					aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
+					window.set_size(window_size.0 as i32, window_size.1 as i32);
+					window.set_monitor(window_mode, pos.0, pos.1, window_size.0, window_size.1, Some(144));
+				}
 			}
-		}
 	});
 	*/
 
@@ -76,7 +130,7 @@ fn main() {
 	window.set_cursor_pos_polling(true);
 
 	//Initialize all OpenGL function pointers
-	gl::load_with(|symbol| window.get_proc_address(symbol) as *const _);
+	gl::load_with(|symbol| window.get_proc_address(symbol) as *const _);	
 
 	//OpenGL static configuration
 	unsafe {
@@ -87,6 +141,10 @@ fn main() {
 		gl::Enable(gl::BLEND);											//Enable alpha blending
 		gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);			//Set blend func to (Cs * alpha + Cd * (1.0 - alpha))
 		gl::ClearColor(0.53, 0.81, 0.92, 1.0);							//Set the clear color to a pleasant blue
+		gl::Enable(gl::DEBUG_OUTPUT);									//Enable verbose debug output
+		gl::Enable(gl::DEBUG_OUTPUT_SYNCHRONOUS);						//Synchronously call the debug callback function
+		gl::DebugMessageCallback(gl_debug_callback, ptr::null());		//Register the debug callback
+		gl::DebugMessageControl(gl::DONT_CARE, gl::DONT_CARE, gl::DONT_CARE, 0, ptr::null(), gl::TRUE);
 	}
 
 	//Define the default framebuffer
@@ -111,7 +169,7 @@ fn main() {
 	let mut arena_pieces = Vec::new();
 
 	//Define the floor plane
-	let floor_index = unsafe {
+	unsafe {
 		let arena_ratio = 16.0 / 9.0;
 		let tex_scale = 3.0;
 		let scale = 2.0;
@@ -344,7 +402,7 @@ fn main() {
 		Ok(s) => { s }
 		Err(e) => { panic!("{}", e) }
 	};
-	let mut glyph_brush = GlyphBrushBuilder::using_font(font).build();
+	let mut glyph_brush = GlyphBrushBuilder::using_font(font).initial_cache_size((512, 512)).build();
 
 	//Create the glyph texture
 	let glyph_texture = unsafe {
@@ -544,7 +602,7 @@ fn main() {
 		//Update text
 		let mut section = Section::new();
 		section.screen_position = (20.0, 20.0);
-		let section = section.add_text(Text::new("I met a traveller from an antique land,
+		let mut text = Text::new("I met a traveller from an antique land,
 		Who said—“Two vast and trunkless legs of stone
 		Stand in the desert. . . . Near them, on the sand,
 		Half sunk a shattered visage lies, whose frown,
@@ -557,12 +615,13 @@ fn main() {
 		Look on my Works, ye Mighty, and despair!
 		Nothing beside remains. Round the decay
 		Of that colossal Wreck, boundless and bare
-		The lone and level sands stretch far away.”").with_color([1.0, 1.0, 1.0, 1.0]));
+		The lone and level sands stretch far away.”").with_color([1.0, 1.0, 1.0, 1.0]);
+		text.scale = PxScale::from(18.0);
+		let section = section.add_text(text);
 		glyph_brush.queue(section);
 
 		//glyph_brush processing
-		match glyph_brush.process_queued(|rect, tex_data| unsafe {
-			gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
+		let mut glyph_result = glyph_brush.process_queued(|rect, tex_data| unsafe {
 			gl::TextureSubImage2D(
 				glyph_texture,
 				0,
@@ -584,15 +643,56 @@ fn main() {
 			let textop = vertex.tex_coords.min.y;
 			let texbottom = vertex.tex_coords.max.y;
 
-			//We need to return four vertices
+			//We need to return four vertices in screen space
 			[
 				left, bottom, texleft, texbottom,
 				right, bottom, texright, texbottom,
 				left, top, texleft, textop,
 				right, top, texright, textop
 			]
-		}) {
-			Ok(BrushAction::Draw(verts)) => {
+		});
+
+		if let Err(BrushError::TextureTooSmall { suggested }) = glyph_result {
+			println!("Resizing glyph_texture {:?}", suggested);
+			unsafe {
+				gl::BindTexture(gl::TEXTURE_2D, glyph_texture);
+				gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RED as GLint, suggested.0 as GLint, suggested.1 as GLint, 0, gl::RED, gl::UNSIGNED_BYTE, ptr::null());
+			}
+			glyph_result = glyph_brush.process_queued(|rect, tex_data| unsafe {
+				gl::TextureSubImage2D(
+					glyph_texture,
+					0,
+					rect.min[0] as _,
+					rect.min[1] as _,
+					rect.width() as _,
+					rect.height() as _,
+					gl::RED,
+					gl::UNSIGNED_BYTE,
+					tex_data.as_ptr() as _
+				);
+			}, |vertex| {
+				let left = vertex.pixel_coords.min.x as f32;
+				let right = vertex.pixel_coords.max.x as f32;
+				let top = vertex.pixel_coords.min.y as f32;
+				let bottom = vertex.pixel_coords.max.y as f32;
+				let texleft = vertex.tex_coords.min.x;
+				let texright = vertex.tex_coords.max.x;
+				let textop = vertex.tex_coords.min.y;
+				let texbottom = vertex.tex_coords.max.y;
+	
+				//We need to return four vertices in screen space
+				[
+					left, bottom, texleft, texbottom,
+					right, bottom, texright, texbottom,
+					left, top, texleft, textop,
+					right, top, texright, textop
+				]
+			});
+		}
+		
+		//This should never fail
+		match glyph_result.unwrap() {
+			BrushAction::Draw(verts) => {
 				let mut vertex_buffer = Vec::with_capacity(verts.len() * 16);
 				let mut index_buffer = vec![0; verts.len() * 6];
 				for vert in verts.iter() {
@@ -620,13 +720,9 @@ fn main() {
 						glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &[2, 2]));
 					}
 				}
+				println!("Rendered new text");
 			}
-			Ok(BrushAction::ReDraw) => {
-
-			}
-			Err(BrushError::TextureTooSmall { suggested }) => {
-				
-			}
+			BrushAction::ReDraw => {}
 		}
 
 		//-----------Rendering-----------
@@ -699,7 +795,7 @@ fn main() {
 
 			//Set texture sampler values
 			initialize_texture_samplers(mapped_instanced_shader, &TEXTURE_MAP_IDENTIFIERS);
-			glutil::bind_matrix4(mapped_shader, "shadow_matrix", &(shadow_projection * shadow_from_world));
+			glutil::bind_matrix4(mapped_instanced_shader, "shadow_matrix", &(shadow_projection * shadow_from_world));
 			glutil::bind_vector4(mapped_instanced_shader, "sun_direction", &sun_direction);
 
 			//Bind the shadow map's data

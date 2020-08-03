@@ -38,8 +38,8 @@ void main() {
         //Average the 3x3 block of shadow texels centered at this pixel
         for (int x = -1; x <= 1; x++) {
             for (int y = -1; y <= 1; y++) {
-                float mapped_depth = texture(shadow_map, adj_shadow_space_pos.xy + vec2(x, y) * texel_size).r;
-                shadow += mapped_depth < adj_shadow_space_pos.z ? 1.0 : 0.0;
+                float sampled_depth = texture(shadow_map, adj_shadow_space_pos.xy + vec2(x, y) * texel_size).r;
+                shadow += sampled_depth < adj_shadow_space_pos.z ? 1.0 : 0.0;
             }
         }
         shadow /= 9.0;
