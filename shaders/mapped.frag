@@ -28,12 +28,21 @@ void main() {
     //Determine if the fragment is shadowed
     float shadow = 0.0; 
     vec4 adj_shadow_space_pos = shadow_space_pos * 0.5 + 0.5;
-    float offset = max(0.005, 0.05 * dot(vec3(sun_direction), normal));
+    vec2 texel_size = 1.0 / textureSize(shadow_map, 0);
+    
     if (adj_shadow_space_pos.z > 1.0) {
         shadow = 0.0;
     }
-    else if (texture(shadow_map, adj_shadow_space_pos.xy).r < adj_shadow_space_pos.z ) {
-        shadow = 1.0;
+    else {
+        //Do PCF
+        //Average the 3x3 block of shadow texels centered at this pixel
+        for (int x = -1; x <= 1; x++) {
+            for (int y = -1; y <= 1; y++) {
+                float mapped_depth = texture(shadow_map, adj_shadow_space_pos.xy + vec2(x, y) * texel_size).r;
+                shadow += mapped_depth < adj_shadow_space_pos.z ? 1.0 : 0.0;
+            }
+        }
+        shadow /= 9.0;
     }
 
     float diffuse = max(0.0, dot(vec3(sun_direction), normal));
