@@ -5,7 +5,7 @@ use std::os::raw::c_void;
 use std::time::Instant;
 use glfw::{Action, Context, Key, MouseButton, WindowEvent, WindowMode};
 use gl::types::*;
-use glyph_brush::{ab_glyph::{FontArc, PxScale}, BrushAction, BrushError, GlyphBrushBuilder, GlyphCruncher, Section, Text};
+use glyph_brush::{ab_glyph::{FontArc, PxScale}, BrushAction, BrushError, GlyphBrushBuilder, GlyphCruncher, GlyphVertex, Section, Text};
 use ozy_engine::{glutil, routines};
 use ozy_engine::structs::OptionVec;
 use crate::structs::*;
@@ -31,6 +31,26 @@ unsafe fn initialize_texture_samplers(program: GLuint, identifiers: &[&str]) {
 	for i in 0..identifiers.len() {
 		glutil::bind_byte(program, identifiers[i], i as GLint);
 	}
+}
+
+//Second argument to glyph_brush.process_queued()
+fn glyph_vertex_transform(vertex: GlyphVertex) -> [f32; 16] {	
+	let left = vertex.pixel_coords.min.x as f32;
+	let right = vertex.pixel_coords.max.x as f32;
+	let top = vertex.pixel_coords.min.y as f32;
+	let bottom = vertex.pixel_coords.max.y as f32;
+	let texleft = vertex.tex_coords.min.x;
+	let texright = vertex.tex_coords.max.x;
+	let textop = vertex.tex_coords.min.y;
+	let texbottom = vertex.tex_coords.max.y;
+
+	//We need to return four vertices in screen space
+	[
+		left, bottom, texleft, texbottom,
+		right, bottom, texright, texbottom,
+		left, top, texleft, textop,
+		right, top, texright, textop
+	]	
 }
 
 extern "system" fn gl_debug_callback(source: GLenum, gltype: GLenum, id: GLuint, severity: GLenum, length: GLsizei, message: *const GLchar, user_param: *mut c_void) {
@@ -143,7 +163,7 @@ fn main() {
 		gl::ClearColor(0.53, 0.81, 0.92, 1.0);							//Set the clear color to a pleasant blue
 		gl::Enable(gl::DEBUG_OUTPUT);									//Enable verbose debug output
 		gl::Enable(gl::DEBUG_OUTPUT_SYNCHRONOUS);						//Synchronously call the debug callback function
-		gl::DebugMessageCallback(gl_debug_callback, ptr::null());		//Register the debug callback
+		//gl::DebugMessageCallback(gl_debug_callback, ptr::null());		//Register the debug callback
 		gl::DebugMessageControl(gl::DONT_CARE, gl::DONT_CARE, gl::DONT_CARE, 0, ptr::null(), gl::TRUE);
 	}
 
@@ -333,18 +353,21 @@ fn main() {
 	let mut command_buffer = Vec::new();
 
 	//Default keybindings
-	let mut key_bindings = HashMap::new();
-	key_bindings.insert((Key::Escape, Action::Press), Commands::Quit);
-	key_bindings.insert((Key::Q, Action::Press), Commands::ToggleWireframe);
-	key_bindings.insert((Key::W, Action::Press), Commands::MoveForwards);
-	key_bindings.insert((Key::S, Action::Press), Commands::MoveBackwards);
-	key_bindings.insert((Key::A, Action::Press), Commands::RotateLeft);
-	key_bindings.insert((Key::D, Action::Press), Commands::RotateRight);
+	let key_bindings = {
+		let mut map = HashMap::new();
+		map.insert((Key::Escape, Action::Press), Commands::TogglePauseMenu);
+		map.insert((Key::Q, Action::Press), Commands::ToggleWireframe);
+		map.insert((Key::W, Action::Press), Commands::MoveForwards);
+		map.insert((Key::S, Action::Press), Commands::MoveBackwards);
+		map.insert((Key::A, Action::Press), Commands::RotateLeft);
+		map.insert((Key::D, Action::Press), Commands::RotateRight);
 
-	key_bindings.insert((Key::W, Action::Release), Commands::StopMoving);
-	key_bindings.insert((Key::S, Action::Release), Commands::StopMoving);
-	key_bindings.insert((Key::A, Action::Release), Commands::StopRotating);
-	key_bindings.insert((Key::D, Action::Release), Commands::StopRotating);
+		map.insert((Key::W, Action::Release), Commands::StopMoving);
+		map.insert((Key::S, Action::Release), Commands::StopMoving);
+		map.insert((Key::A, Action::Release), Commands::StopRotating);
+		map.insert((Key::D, Action::Release), Commands::StopRotating);
+		map
+	};
 
 	//Initialize the shadow map
 	let shadow_size = 4096;
@@ -428,6 +451,21 @@ fn main() {
 		0.0, 0.0, 1.0, 0.0,
 		0.0, 0.0, 0.0, 1.0
 	);
+	let mut sections = OptionVec::new();
+
+	let mut section = Section::new();
+	section.screen_position = (50.0, 20.0);
+	let mut text = Text::new("First line of text").with_color([1.0, 1.0, 1.0, 1.0]);
+	text.scale = PxScale::from(24.0);
+	sections.insert(section.add_text(text));
+
+	let mut section = Section::new();
+	section.screen_position = (50.0, 80.0);
+	let mut text = Text::new("Second line of text").with_color([1.0, 1.0, 1.0, 1.0]);
+	text.scale = PxScale::from(24.0);
+	sections.insert(section.add_text(text));
+
+	let mut game_state = GameState::Playing;
 
 	//Main loop
     while !window.should_close() {
@@ -491,6 +529,9 @@ fn main() {
 				Commands::StopRotating => {
 					tank.tank_rotating = Rotating::Not;
 				}
+				Commands::TogglePauseMenu => {
+					game_state = GameState::Paused;
+				}
 				Commands::ToggleFreecam => {
 
 				}
@@ -498,127 +539,120 @@ fn main() {
 		}
 
 		//-----------Simulating-----------
-
-		//Update the tank's position
-		match tank.move_state {
-			TankMoving::Forwards => {
-				tank.position += tank.forward * -tank.speed * delta_time;
-			}
-			TankMoving::Backwards => {
-				tank.position += tank.forward * tank.speed * delta_time;
-			}
-			TankMoving::Not => {}
-		}
-
-		//Update the tank's forward vector
-		tank.forward = match tank.tank_rotating {
-			Rotating::Left => {
-				glm::vec4_to_vec3(&(glm::rotation(-glm::half_pi::<f32>() * delta_time, &glm::vec3(0.0, 1.0, 0.0)) * glm::vec3_to_vec4(&tank.forward)))
-			}
-			Rotating::Right => {
-				glm::vec4_to_vec3(&(glm::rotation(glm::half_pi::<f32>() * delta_time, &glm::vec3(0.0, 1.0, 0.0)) * glm::vec3_to_vec4(&tank.forward)))
-			}
-			Rotating::Not => { tank.forward }
-		};
-
-		let tank_rotation = {
-			let new_x = -glm::cross(&tank.forward, &glm::vec3(0.0, 1.0, 0.0));
-			glm::mat4(new_x.x, 0.0, tank.forward.x, 0.0,
-					  new_x.y, 1.0, tank.forward.y, 0.0,
-					  new_x.z, 0.0, tank.forward.z, 0.0,
-					  0.0, 0.0, 0.0, 1.0
-					)
-		};
-
-		tank.skeleton.node_data[0].transform = glm::translation(&tank.position) * tank_rotation;
-
-		//Calculate turret rotation
-		//Simple ray-plane intersection.
-		tank.skeleton.node_data[1].transform = {
-			let plane_normal = glm::vec3(0.0, 1.0, 0.0);
-			let origin = tank.skeleton.node_data[0].transform * turret_origin;
-			let t = glm::dot(&glm::vec4_to_vec3(&(origin - world_space_mouse)), &plane_normal) / glm::dot(&glm::vec4_to_vec3(&world_space_look_direction), &plane_normal);
-			let intersection = world_space_mouse + t * world_space_look_direction;
-			tank.turret_forward = glm::normalize(&(intersection - origin));
-			let new_x = -glm::cross(&glm::vec4_to_vec3(&-tank.turret_forward), &glm::vec3(0.0, 1.0, 0.0));
-
-			tank.skeleton.node_data[0].transform *
-			glm::mat4(new_x.x, 0.0, -tank.turret_forward.x, 0.0,
-					  new_x.y, 1.0, -tank.turret_forward.y, 0.0,
-					  new_x.z, 0.0, -tank.turret_forward.z, 0.0,
-					  0.0, 0.0, 0.0, 1.0
-					) * glm::affine_inverse(tank_rotation)
-		};
-
-		//Fire a shell if the mouse was clicked this frame
-		if tank.firing {
-			let transform = tank.skeleton.node_data[1].transform;
-			let position = transform * glm::vec4(0.0, 0.0, 0.0, 1.0);
-			let velocity = tank.turret_forward * 2.0;
-
-			shells.insert(Shell {
-				position,
-				velocity,
-				transform,
-				vao: shell_mesh.vao,
-				spawn_time: elapsed_time
-			});
-		}
-		
-		//Update shells
-		let mut shell_transforms = vec![0.0; shells.count() * 16];
-		let mut current_shell = 0;
-		for i in 0..shells.len() {
-			if let Some(shell) = &mut shells[i] {
-				//Update position
-				shell.position += shell.velocity * delta_time;
-
-				//Update the translation part of the transform
-				shell.transform[12] = shell.position.x;
-				shell.transform[13] = shell.position.y;
-				shell.transform[14] = shell.position.z;
-
-				//Fill the position buffer used for instanced rendering
-				for j in 0..16 {
-					shell_transforms[current_shell * 16 + j] = shell.transform[j];
+		match game_state {
+			GameState::Playing => {
+				//Update the tank's position
+				match tank.move_state {
+					TankMoving::Forwards => {
+						tank.position += tank.forward * -tank.speed * delta_time;
+					}
+					TankMoving::Backwards => {
+						tank.position += tank.forward * tank.speed * delta_time;
+					}
+					TankMoving::Not => {}
 				}
-				current_shell += 1;
+
+				//Update the tank's forward vector
+				tank.forward = match tank.tank_rotating {
+					Rotating::Left => {
+						glm::vec4_to_vec3(&(glm::rotation(-glm::half_pi::<f32>() * delta_time, &glm::vec3(0.0, 1.0, 0.0)) * glm::vec3_to_vec4(&tank.forward)))
+					}
+					Rotating::Right => {
+						glm::vec4_to_vec3(&(glm::rotation(glm::half_pi::<f32>() * delta_time, &glm::vec3(0.0, 1.0, 0.0)) * glm::vec3_to_vec4(&tank.forward)))
+					}
+					Rotating::Not => { tank.forward }
+				};
+
+				let tank_rotation = {
+					let new_x = -glm::cross(&tank.forward, &glm::vec3(0.0, 1.0, 0.0));
+					glm::mat4(new_x.x, 0.0, tank.forward.x, 0.0,
+							new_x.y, 1.0, tank.forward.y, 0.0,
+							new_x.z, 0.0, tank.forward.z, 0.0,
+							0.0, 0.0, 0.0, 1.0
+							)
+				};
+
+				tank.skeleton.node_data[0].transform = glm::translation(&tank.position) * tank_rotation;
+
+				//Calculate turret rotation
+				//Simple ray-plane intersection.
+				tank.skeleton.node_data[1].transform = {
+					let plane_normal = glm::vec3(0.0, 1.0, 0.0);
+					let origin = tank.skeleton.node_data[0].transform * turret_origin;
+					let t = glm::dot(&glm::vec4_to_vec3(&(origin - world_space_mouse)), &plane_normal) / glm::dot(&glm::vec4_to_vec3(&world_space_look_direction), &plane_normal);
+					let intersection = world_space_mouse + t * world_space_look_direction;
+					tank.turret_forward = glm::normalize(&(intersection - origin));
+					let new_x = -glm::cross(&glm::vec4_to_vec3(&-tank.turret_forward), &glm::vec3(0.0, 1.0, 0.0));
+
+					tank.skeleton.node_data[0].transform *
+					glm::mat4(new_x.x, 0.0, -tank.turret_forward.x, 0.0,
+							new_x.y, 1.0, -tank.turret_forward.y, 0.0,
+							new_x.z, 0.0, -tank.turret_forward.z, 0.0,
+							0.0, 0.0, 0.0, 1.0
+							) * glm::affine_inverse(tank_rotation)
+				};
+
+				//Fire a shell if the mouse was clicked this frame
+				if tank.firing {
+					let transform = tank.skeleton.node_data[1].transform;
+					let position = transform * glm::vec4(0.0, 0.0, 0.0, 1.0);
+					let velocity = tank.turret_forward * 2.0;
+
+					shells.insert(Shell {
+						position,
+						velocity,
+						transform,
+						vao: shell_mesh.vao,
+						spawn_time: elapsed_time
+					});
+				}
+				
+				//Update shells
+				let mut shell_transforms = vec![0.0; shells.count() * 16];
+				let mut current_shell = 0;
+				for i in 0..shells.len() {
+					if let Some(shell) = &mut shells[i] {
+						//Update position
+						shell.position += shell.velocity * delta_time;
+
+						//Update the translation part of the transform
+						shell.transform[12] = shell.position.x;
+						shell.transform[13] = shell.position.y;
+						shell.transform[14] = shell.position.z;
+
+						//Fill the position buffer used for instanced rendering
+						for j in 0..16 {
+							shell_transforms[current_shell * 16 + j] = shell.transform[j];
+						}
+						current_shell += 1;
+					}
+				}
+
+				//Update GPU buffer storing shell transforms
+				if shell_transforms.len() > 0 {
+					unsafe {
+						gl::BindBuffer(gl::ARRAY_BUFFER, shell_instanced_buffer);
+						gl::BufferSubData(gl::ARRAY_BUFFER,
+										0 as GLsizeiptr, 
+										(shell_transforms.len() * mem::size_of::<GLfloat>()) as GLsizeiptr,
+										&shell_transforms[0] as *const GLfloat as *const c_void
+										);
+					}
+				}
+				tank.firing = false;
 			}
+			_ => {}
 		}
 
-		//Update GPU buffer storing shell transforms
-		if shell_transforms.len() > 0 {
-			unsafe {
-				gl::BindBuffer(gl::ARRAY_BUFFER, shell_instanced_buffer);
-				gl::BufferSubData(gl::ARRAY_BUFFER,
-								0 as GLsizeiptr, 
-								(shell_transforms.len() * mem::size_of::<GLfloat>()) as GLsizeiptr,
-								&shell_transforms[0] as *const GLfloat as *const c_void
-								);
-			}
-		}
-		tank.firing = false;
 
-		//Update text
-		let mut section = Section::new();
-		section.screen_position = (20.0, 20.0);
-		let mut text = Text::new("I met a traveller from an antique land,
-		Who said—“Two vast and trunkless legs of stone
-		Stand in the desert. . . . Near them, on the sand,
-		Half sunk a shattered visage lies, whose frown,
-		And wrinkled lip, and sneer of cold command,
-		Tell that its sculptor well those passions read
-		Which yet survive, stamped on these lifeless things,
-		The hand that mocked them, and the heart that fed;
-		And on the pedestal, these words appear:
-		My name is Ozymandias, King of Kings;
-		Look on my Works, ye Mighty, and despair!
-		Nothing beside remains. Round the decay
-		Of that colossal Wreck, boundless and bare
-		The lone and level sands stretch far away.”").with_color([1.0, 1.0, 1.0, 1.0]);
-		text.scale = PxScale::from(18.0);
-		let section = section.add_text(text);
-		glyph_brush.queue(section);
+		//-----------Rendering-----------
+
+		//Queue glyph_brush sections
+		for sec in sections.iter() {
+			if let Some(s) = sec {
+				glyph_brush.queue(s);
+			}			
+		}
 
 		//glyph_brush processing
 		let mut glyph_result = glyph_brush.process_queued(|rect, tex_data| unsafe {
@@ -633,31 +667,17 @@ fn main() {
 				gl::UNSIGNED_BYTE,
 				tex_data.as_ptr() as _
 			);
-		}, |vertex| {
-			let left = vertex.pixel_coords.min.x as f32;
-			let right = vertex.pixel_coords.max.x as f32;
-			let top = vertex.pixel_coords.min.y as f32;
-			let bottom = vertex.pixel_coords.max.y as f32;
-			let texleft = vertex.tex_coords.min.x;
-			let texright = vertex.tex_coords.max.x;
-			let textop = vertex.tex_coords.min.y;
-			let texbottom = vertex.tex_coords.max.y;
+		}, glyph_vertex_transform);
 
-			//We need to return four vertices in screen space
-			[
-				left, bottom, texleft, texbottom,
-				right, bottom, texright, texbottom,
-				left, top, texleft, textop,
-				right, top, texright, textop
-			]
-		});
-
+		//Resize the glyph texture if it's too small
 		if let Err(BrushError::TextureTooSmall { suggested }) = glyph_result {
 			println!("Resizing glyph_texture {:?}", suggested);
+			let (width, height) = suggested;
 			unsafe {
 				gl::BindTexture(gl::TEXTURE_2D, glyph_texture);
-				gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RED as GLint, suggested.0 as GLint, suggested.1 as GLint, 0, gl::RED, gl::UNSIGNED_BYTE, ptr::null());
+				gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RED as GLint, width as GLint, height as GLint, 0, gl::RED, gl::UNSIGNED_BYTE, ptr::null());
 			}
+			glyph_brush.resize_texture(width, height);
 			glyph_result = glyph_brush.process_queued(|rect, tex_data| unsafe {
 				gl::TextureSubImage2D(
 					glyph_texture,
@@ -670,24 +690,7 @@ fn main() {
 					gl::UNSIGNED_BYTE,
 					tex_data.as_ptr() as _
 				);
-			}, |vertex| {
-				let left = vertex.pixel_coords.min.x as f32;
-				let right = vertex.pixel_coords.max.x as f32;
-				let top = vertex.pixel_coords.min.y as f32;
-				let bottom = vertex.pixel_coords.max.y as f32;
-				let texleft = vertex.tex_coords.min.x;
-				let texright = vertex.tex_coords.max.x;
-				let textop = vertex.tex_coords.min.y;
-				let texbottom = vertex.tex_coords.max.y;
-	
-				//We need to return four vertices in screen space
-				[
-					left, bottom, texleft, texbottom,
-					right, bottom, texright, texbottom,
-					left, top, texleft, textop,
-					right, top, texright, textop
-				]
-			});
+			}, glyph_vertex_transform);
 		}
 		
 		//This should never fail
@@ -725,7 +728,6 @@ fn main() {
 			BrushAction::ReDraw => {}
 		}
 
-		//-----------Rendering-----------
 		const TEXTURE_MAP_IDENTIFIERS: [&str; 4] = ["albedo_map", "normal_map", "roughness_map", "shadow_map"];
 		unsafe {
 			//Bind shadow framebuffer

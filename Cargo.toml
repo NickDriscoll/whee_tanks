@@ -11,5 +11,5 @@ edition = "2018"
 ozy_engine = { path = "../ozy_engine" }
 glfw = "0.32.0"
 gl = "0.10.0"
-nalgebra-glm = "*"
+nalgebra-glm = "0.5"
 glyph_brush = "0.7.0"

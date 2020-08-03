@@ -146,5 +146,13 @@ pub enum Commands {
     MoveBackwards,
     StopMoving,
     StopRotating,
-    ToggleFreecam
+    ToggleFreecam,
+    TogglePauseMenu
+}
+
+//State that controls what is updated and what is drawn
+pub enum GameState {
+    Playing,
+    MainMenu,
+    Paused
 }
