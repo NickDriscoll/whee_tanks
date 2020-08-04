@@ -163,11 +163,82 @@ fn main() {
 		gl::ClearColor(0.53, 0.81, 0.92, 1.0);							//Set the clear color to a pleasant blue
 		gl::Enable(gl::DEBUG_OUTPUT);									//Enable verbose debug output
 		gl::Enable(gl::DEBUG_OUTPUT_SYNCHRONOUS);						//Synchronously call the debug callback function
-		//gl::DebugMessageCallback(gl_debug_callback, ptr::null());		//Register the debug callback
+		gl::DebugMessageCallback(gl_debug_callback, ptr::null());		//Register the debug callback
 		gl::DebugMessageControl(gl::DONT_CARE, gl::DONT_CARE, gl::DONT_CARE, 0, ptr::null(), gl::TRUE);
 	}
 
-	//Define the default framebuffer
+	//This is the framebuffer that the 3D scene is rendered to before image effects are applied
+	let (preeffect_framebuffer, preeffect_texture) = unsafe {
+		let mut fbo = 0;
+		let mut texs = [0; 2];
+		gl::GenFramebuffers(1, &mut fbo);
+		gl::GenTextures(2, &mut texs[0]);
+		let (color_tex, depth_tex) = (texs[0], texs[1]);
+
+		//Initialize the color buffer
+		gl::BindTexture(gl::TEXTURE_2D, color_tex);
+		gl::TexImage2D(
+			gl::TEXTURE_2D,
+			0,
+			gl::SRGB8_ALPHA8 as GLint,
+			window_size.0 as GLint,
+			window_size.1 as GLint,
+			0,
+			gl::RGBA,
+			gl::FLOAT,
+			ptr::null()
+		);
+		glutil::apply_texture_parameters(&DEFAULT_TEX_PARAMS);
+
+		gl::BindTexture(gl::TEXTURE_2D, depth_tex);
+		gl::TexImage2D(
+			gl::TEXTURE_2D,
+			0,
+			gl::DEPTH_COMPONENT as GLint,
+			window_size.0 as GLint,
+			window_size.1 as GLint,
+			0,
+			gl::DEPTH_COMPONENT,
+			gl::FLOAT,
+			ptr::null()
+		);
+		glutil::apply_texture_parameters(&DEFAULT_TEX_PARAMS);
+
+		gl::BindFramebuffer(gl::FRAMEBUFFER, fbo);
+		gl::FramebufferTexture2D(
+			gl::FRAMEBUFFER,
+			gl::COLOR_ATTACHMENT0,
+			gl::TEXTURE_2D,
+			color_tex,
+			0
+		);
+		gl::FramebufferTexture2D(
+			gl::FRAMEBUFFER,
+			gl::DEPTH_ATTACHMENT,
+			gl::TEXTURE_2D,
+			depth_tex,
+			0
+		);
+		gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
+
+		let f_buffer = Framebuffer {
+			name: fbo,
+			size: (window_size.0 as GLsizei, window_size.1 as GLsizei),
+			clear_flags: gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT,
+			cull_face: gl::BACK
+		};
+		(f_buffer, color_tex)
+	};
+	let postprocessing_vao = unsafe {
+		let vs = [
+			-1.0, -1.0, 0.0, 0.0,
+			3.0, -1.0, 2.0, 0.0,
+			-1.0, 3.0, 0.0, 2.0
+		];
+		glutil::create_vertex_array_object(&vs, &[0, 1, 2], &[2, 2])
+	};
+
+	//Initialize default framebuffer
 	let default_framebuffer = Framebuffer {
 		name: 0,
 		size: (window_size.0 as GLsizei, window_size.1 as GLsizei),
@@ -181,6 +252,7 @@ fn main() {
 	let shadow_shader = unsafe { glutil::compile_program_from_files("shaders/shadow.vert", "shaders/shadow.frag") };
 	let shadow_shader_instanced = unsafe { glutil::compile_program_from_files("shaders/shadow_instanced.vert", "shaders/shadow.frag") };
 	let glyph_shader = unsafe { glutil::compile_program_from_files("shaders/glyph.vert", "shaders/glyph.frag") };
+	let postprocessing_shader = unsafe { glutil::compile_program_from_files("shaders/postprocessing.vert", "shaders/postprocessing.frag") };
 
 	//Initialize texture caching data structure
 	let mut texture_keeper = TextureKeeper::new();
@@ -353,7 +425,7 @@ fn main() {
 	let mut command_buffer = Vec::new();
 
 	//Default keybindings
-	let key_bindings = {
+	let mut key_bindings = {
 		let mut map = HashMap::new();
 		map.insert((Key::Escape, Action::Press), Commands::TogglePauseMenu);
 		map.insert((Key::Q, Action::Press), Commands::ToggleWireframe);
@@ -391,10 +463,7 @@ fn main() {
 			gl::FLOAT,
 			ptr::null()
 		);
-		gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::NEAREST as i32);
-		gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::NEAREST as i32);
-		gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::REPEAT as i32);
-		gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::REPEAT as i32);
+		glutil::apply_texture_parameters(&DEFAULT_TEX_PARAMS);
 
 		gl::BindFramebuffer(gl::FRAMEBUFFER, shadow_framebuffer);
 		gl::FramebufferTexture2D(
@@ -452,18 +521,6 @@ fn main() {
 		0.0, 0.0, 0.0, 1.0
 	);
 	let mut sections = OptionVec::new();
-
-	let mut section = Section::new();
-	section.screen_position = (50.0, 20.0);
-	let mut text = Text::new("First line of text").with_color([1.0, 1.0, 1.0, 1.0]);
-	text.scale = PxScale::from(24.0);
-	sections.insert(section.add_text(text));
-
-	let mut section = Section::new();
-	section.screen_position = (50.0, 80.0);
-	let mut text = Text::new("Second line of text").with_color([1.0, 1.0, 1.0, 1.0]);
-	text.scale = PxScale::from(24.0);
-	sections.insert(section.add_text(text));
 
 	let mut game_state = GameState::Playing;
 
@@ -530,7 +587,11 @@ fn main() {
 					tank.tank_rotating = Rotating::Not;
 				}
 				Commands::TogglePauseMenu => {
-					game_state = GameState::Paused;
+					match game_state {
+						GameState::Paused => { game_state = GameState::Resuming; }
+						GameState::Playing => { game_state = GameState::Pausing; }
+						_ => {}
+					}
 				}
 				Commands::ToggleFreecam => {
 
@@ -641,6 +702,34 @@ fn main() {
 				}
 				tank.firing = false;
 			}
+			GameState::Pausing => {
+				//Draw the pause menu
+				sections.clear();
+				let labels = ["Resume", "Settings", "Main Menu", "Exit"];
+				for i in 0..labels.len() {
+					let y_buffer = 10.0;
+					let mut section = {
+						let section = Section::new();
+						let mut text = Text::new(labels[i]).with_color([1.0, 1.0, 1.0, 1.0]);
+						text.scale = PxScale::from(36.0);
+						section.add_text(text)
+					};
+					let bounding_box = match glyph_brush.glyph_bounds(&section) {
+						Some(rect) => { rect }
+						None => { continue; }
+					};
+					section.screen_position = (
+						window_size.0 as f32 / 2.0 - bounding_box.width() / 2.0,
+						window_size.1 as f32 / 2.5 + (bounding_box.height() + y_buffer) * i as f32
+					);
+					sections.insert(section);
+				}
+				game_state = GameState::Paused;
+			}
+			GameState::Resuming => {
+				sections.clear();
+				game_state = GameState::Playing;
+			}
 			_ => {}
 		}
 
@@ -696,40 +785,55 @@ fn main() {
 		//This should never fail
 		match glyph_result.unwrap() {
 			BrushAction::Draw(verts) => {
-				let mut vertex_buffer = Vec::with_capacity(verts.len() * 16);
-				let mut index_buffer = vec![0; verts.len() * 6];
-				for vert in verts.iter() {
-					for v in vert {
-						vertex_buffer.push(*v);
+				if verts.len() > 0 {
+					let mut vertex_buffer = Vec::with_capacity(verts.len() * 16);
+					let mut index_buffer = vec![0; verts.len() * 6];
+					for vert in verts.iter() {
+						for v in vert {
+							vertex_buffer.push(*v);
+						}
 					}
-				}
-				glyph_count = verts.len();
+					glyph_count = verts.len();
 
-				for i in 0..verts.len() {
-					index_buffer[i * 6] = 4 * i as u16;
-					index_buffer[i * 6 + 1] = index_buffer[i * 6] + 1;
-					index_buffer[i * 6 + 2] = index_buffer[i * 6] + 2;
-					index_buffer[i * 6 + 3] = index_buffer[i * 6] + 3;
-					index_buffer[i * 6 + 4] = index_buffer[i * 6] + 2;
-					index_buffer[i * 6 + 5] = index_buffer[i * 6] + 1;
-				}
+					for i in 0..verts.len() {
+						index_buffer[i * 6] = 4 * i as u16;
+						index_buffer[i * 6 + 1] = index_buffer[i * 6] + 1;
+						index_buffer[i * 6 + 2] = index_buffer[i * 6] + 2;
+						index_buffer[i * 6 + 3] = index_buffer[i * 6] + 3;
+						index_buffer[i * 6 + 4] = index_buffer[i * 6] + 2;
+						index_buffer[i * 6 + 5] = index_buffer[i * 6] + 1;
+					}
 
-				match glyph_vao {
-					Some(mut vao) => unsafe {						
-						gl::DeleteVertexArrays(1, &mut vao);
-						glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &[2, 2]));
+					match glyph_vao {
+						Some(mut vao) => unsafe {						
+							gl::DeleteVertexArrays(1, &mut vao);
+							glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &[2, 2]));
+						}
+						None => unsafe {
+							glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &[2, 2]));
+						}
 					}
-					None => unsafe {
-						glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &[2, 2]));
+					println!("Rendered new text");
+				} else {
+					match glyph_vao {
+						Some(mut vao) => unsafe {
+							gl::DeleteVertexArrays(1, &mut vao);
+							glyph_vao = None;
+						}
+						None => {}
 					}
 				}
-				println!("Rendered new text");
 			}
 			BrushAction::ReDraw => {}
 		}
 
 		const TEXTURE_MAP_IDENTIFIERS: [&str; 4] = ["albedo_map", "normal_map", "roughness_map", "shadow_map"];
 		unsafe {
+			let monochrome = match game_state {
+				GameState::Paused => { 1 }
+				_ => { 0 }
+			};
+
 			//Bind shadow framebuffer
 			shadow_framebuffer.bind();
 
@@ -759,7 +863,7 @@ fn main() {
 			gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
 
 			//Main scene rendering
-			default_framebuffer.bind();
+			preeffect_framebuffer.bind();
 
 			//Bind the GLSL program
 			gl::UseProgram(mapped_shader);
@@ -768,6 +872,8 @@ fn main() {
 			initialize_texture_samplers(mapped_shader, &TEXTURE_MAP_IDENTIFIERS);
 			glutil::bind_matrix4(mapped_shader, "shadow_matrix", &(shadow_projection * shadow_from_world));
 			glutil::bind_vector4(mapped_shader, "sun_direction", &sun_direction);
+			glutil::bind_byte(mapped_shader, "monochrome", monochrome);
+			
 			gl::ActiveTexture(gl::TEXTURE3);
 			gl::BindTexture(gl::TEXTURE_2D, shadow_texture);
 
@@ -799,6 +905,7 @@ fn main() {
 			initialize_texture_samplers(mapped_instanced_shader, &TEXTURE_MAP_IDENTIFIERS);
 			glutil::bind_matrix4(mapped_instanced_shader, "shadow_matrix", &(shadow_projection * shadow_from_world));
 			glutil::bind_vector4(mapped_instanced_shader, "sun_direction", &sun_direction);
+			glutil::bind_byte(mapped_instanced_shader, "monochrome", monochrome);
 
 			//Bind the shadow map's data
 			gl::ActiveTexture(gl::TEXTURE3);
@@ -814,6 +921,15 @@ fn main() {
 			}
 			glutil::bind_matrix4(mapped_instanced_shader, "view_projection", &clipping_from_world);
 			gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
+
+			//Apply post-processing effects
+			default_framebuffer.bind();
+			gl::UseProgram(postprocessing_shader);
+			initialize_texture_samplers(postprocessing_shader, &["image_texture"]);
+			gl::ActiveTexture(gl::TEXTURE0);
+			gl::BindTexture(gl::TEXTURE_2D, preeffect_texture);
+			gl::BindVertexArray(postprocessing_vao);
+			gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
 
 			//Clear the depth buffer before rendering 2D elements
 			gl::Clear(gl::DEPTH_BUFFER_BIT);

@@ -154,5 +154,7 @@ pub enum Commands {
 pub enum GameState {
     Playing,
     MainMenu,
-    Paused
+    Paused,
+    Pausing,
+    Resuming
 }
