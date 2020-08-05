@@ -17,8 +17,6 @@ uniform sampler2D shadow_map;
 uniform vec4 sun_direction;
 uniform vec4 view_direction;
 
-uniform bool monochrome = false;
-
 const float AMBIENT = 0.1;
 
 void main() {
@@ -57,10 +55,5 @@ void main() {
 
     //frag_color = vec4(normal / 2.0 + 0.5, 1.0);
     vec3 final_color = ((specular + diffuse) * (1.0 - shadow) + AMBIENT) * albedo;
-    if (monochrome) {
-        float average = (final_color.r + final_color.g + final_color.b) / 3.0;
-        frag_color = vec4(average, average, average, 1.0);
-    } else {
-        frag_color = vec4(final_color, 1.0);
-    }
+    frag_color = vec4(final_color, 1.0);
 }

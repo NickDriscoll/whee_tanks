@@ -168,67 +168,14 @@ fn main() {
 	}
 
 	//This is the framebuffer that the 3D scene is rendered to before image effects are applied
-	let (preeffect_framebuffer, preeffect_texture) = unsafe {
-		let mut fbo = 0;
-		let mut texs = [0; 2];
-		gl::GenFramebuffers(1, &mut fbo);
-		gl::GenTextures(2, &mut texs[0]);
-		let (color_tex, depth_tex) = (texs[0], texs[1]);
-
-		//Initialize the color buffer
-		gl::BindTexture(gl::TEXTURE_2D, color_tex);
-		gl::TexImage2D(
-			gl::TEXTURE_2D,
-			0,
-			gl::SRGB8_ALPHA8 as GLint,
-			window_size.0 as GLint,
-			window_size.1 as GLint,
-			0,
-			gl::RGBA,
-			gl::FLOAT,
-			ptr::null()
-		);
-		glutil::apply_texture_parameters(&DEFAULT_TEX_PARAMS);
-
-		gl::BindTexture(gl::TEXTURE_2D, depth_tex);
-		gl::TexImage2D(
-			gl::TEXTURE_2D,
-			0,
-			gl::DEPTH_COMPONENT as GLint,
-			window_size.0 as GLint,
-			window_size.1 as GLint,
-			0,
-			gl::DEPTH_COMPONENT,
-			gl::FLOAT,
-			ptr::null()
-		);
-		glutil::apply_texture_parameters(&DEFAULT_TEX_PARAMS);
-
-		gl::BindFramebuffer(gl::FRAMEBUFFER, fbo);
-		gl::FramebufferTexture2D(
-			gl::FRAMEBUFFER,
-			gl::COLOR_ATTACHMENT0,
-			gl::TEXTURE_2D,
-			color_tex,
-			0
-		);
-		gl::FramebufferTexture2D(
-			gl::FRAMEBUFFER,
-			gl::DEPTH_ATTACHMENT,
-			gl::TEXTURE_2D,
-			depth_tex,
-			0
-		);
-		gl::BindFramebuffer(gl::FRAMEBUFFER, 0);
-
-		let f_buffer = Framebuffer {
-			name: fbo,
-			size: (window_size.0 as GLsizei, window_size.1 as GLsizei),
-			clear_flags: gl::COLOR_BUFFER_BIT | gl::DEPTH_BUFFER_BIT,
-			cull_face: gl::BACK
-		};
-		(f_buffer, color_tex)
+	let (preeffect_rendertarget, pong_rendertarget) = unsafe {
+		let size = (window_size.0 as GLint, window_size.1 as GLint);
+		let pre = RenderTarget::new(size);
+		let post = RenderTarget::new(size);
+		(pre, post)
 	};
+
+	//Screen filling triangle with uvs chosen so that the sampled image exactly covers the screen
 	let postprocessing_vao = unsafe {
 		let vs = [
 			-1.0, -1.0, 0.0, 0.0,
@@ -252,7 +199,8 @@ fn main() {
 	let shadow_shader = unsafe { glutil::compile_program_from_files("shaders/shadow.vert", "shaders/shadow.frag") };
 	let shadow_shader_instanced = unsafe { glutil::compile_program_from_files("shaders/shadow_instanced.vert", "shaders/shadow.frag") };
 	let glyph_shader = unsafe { glutil::compile_program_from_files("shaders/glyph.vert", "shaders/glyph.frag") };
-	let postprocessing_shader = unsafe { glutil::compile_program_from_files("shaders/postprocessing.vert", "shaders/postprocessing.frag") };
+	let passthrough_shader = unsafe { glutil::compile_program_from_files("shaders/postprocessing.vert", "shaders/postprocessing.frag") };
+	let gaussian_shader = unsafe { glutil::compile_program_from_files("shaders/postprocessing.vert", "shaders/gaussian_blur.frag") };
 
 	//Initialize texture caching data structure
 	let mut texture_keeper = TextureKeeper::new();
@@ -369,7 +317,7 @@ fn main() {
 	};
 
 	//Load shell graphics
-	let shell_mesh = IndividualMesh::from_ozy("models/better_shell.ozy", &mut texture_keeper);
+	let shell_mesh = SimpleMesh::from_ozy("models/better_shell.ozy", &mut texture_keeper);
 	
 	//Create GPU buffer for instanced matrices
 	let shell_instanced_buffer = unsafe {
@@ -443,7 +391,7 @@ fn main() {
 
 	//Initialize the shadow map
 	let shadow_size = 4096;
-	let (shadow_framebuffer, shadow_texture) = unsafe {
+	let shadow_rendertarget = unsafe {
 		let mut shadow_framebuffer = 0;
 		let mut shadow_texture = 0;
 
@@ -481,7 +429,11 @@ fn main() {
 			clear_flags: gl::DEPTH_BUFFER_BIT,
 			cull_face: gl::FRONT
 		};
-		(framebuffer, shadow_texture)
+
+		RenderTarget {
+			framebuffer,
+			texture: shadow_texture
+		}
 	};
 
 	let shadow_from_world = glm::mat4(-1.0, 0.0, 0.0, 0.0,
@@ -565,8 +517,6 @@ fn main() {
 				}
 				Commands::ToggleWireframe => unsafe {
 					is_wireframe = !is_wireframe;
-					if is_wireframe { gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE); }
-					else { gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL); }
 				}
 				Commands::MoveForwards => {
 					tank.move_state = TankMoving::Forwards;
@@ -829,13 +779,13 @@ fn main() {
 
 		const TEXTURE_MAP_IDENTIFIERS: [&str; 4] = ["albedo_map", "normal_map", "roughness_map", "shadow_map"];
 		unsafe {
-			let monochrome = match game_state {
-				GameState::Paused => { 1 }
-				_ => { 0 }
+			let blur_flag = match game_state {
+				GameState::Paused => { true }
+				_ => { false }
 			};
 
 			//Bind shadow framebuffer
-			shadow_framebuffer.bind();
+			shadow_rendertarget.bind();
 
 			//Bind shadow program
 			gl::UseProgram(shadow_shader);
@@ -863,7 +813,11 @@ fn main() {
 			gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
 
 			//Main scene rendering
-			preeffect_framebuffer.bind();
+			preeffect_rendertarget.bind();
+			
+			//Set polygon fill mode
+			if is_wireframe { gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE); }
+			else { gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL); }
 
 			//Bind the GLSL program
 			gl::UseProgram(mapped_shader);
@@ -872,10 +826,9 @@ fn main() {
 			initialize_texture_samplers(mapped_shader, &TEXTURE_MAP_IDENTIFIERS);
 			glutil::bind_matrix4(mapped_shader, "shadow_matrix", &(shadow_projection * shadow_from_world));
 			glutil::bind_vector4(mapped_shader, "sun_direction", &sun_direction);
-			glutil::bind_byte(mapped_shader, "monochrome", monochrome);
 			
 			gl::ActiveTexture(gl::TEXTURE3);
-			gl::BindTexture(gl::TEXTURE_2D, shadow_texture);
+			gl::BindTexture(gl::TEXTURE_2D, shadow_rendertarget.texture);
 
 			//Render static pieces of the arena
 			for piece in arena_pieces.iter() {
@@ -905,11 +858,10 @@ fn main() {
 			initialize_texture_samplers(mapped_instanced_shader, &TEXTURE_MAP_IDENTIFIERS);
 			glutil::bind_matrix4(mapped_instanced_shader, "shadow_matrix", &(shadow_projection * shadow_from_world));
 			glutil::bind_vector4(mapped_instanced_shader, "sun_direction", &sun_direction);
-			glutil::bind_byte(mapped_instanced_shader, "monochrome", monochrome);
 
 			//Bind the shadow map's data
 			gl::ActiveTexture(gl::TEXTURE3);
-			gl::BindTexture(gl::TEXTURE_2D, shadow_texture);
+			gl::BindTexture(gl::TEXTURE_2D, shadow_rendertarget.texture);
 
 			//Bind the vertex array
 			gl::BindVertexArray(shell_mesh.vao);
@@ -923,13 +875,35 @@ fn main() {
 			gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
 
 			//Apply post-processing effects
-			default_framebuffer.bind();
-			gl::UseProgram(postprocessing_shader);
-			initialize_texture_samplers(postprocessing_shader, &["image_texture"]);
-			gl::ActiveTexture(gl::TEXTURE0);
-			gl::BindTexture(gl::TEXTURE_2D, preeffect_texture);
+			gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);
 			gl::BindVertexArray(postprocessing_vao);
-			gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
+
+			if blur_flag {
+				//Horizontal blur pass
+				pong_rendertarget.bind();
+				gl::UseProgram(gaussian_shader);
+				initialize_texture_samplers(gaussian_shader, &["image_texture"]);
+				gl::ActiveTexture(gl::TEXTURE0);
+				gl::BindTexture(gl::TEXTURE_2D, preeffect_rendertarget.texture);
+				glutil::bind_byte(gaussian_shader, "horizontal", 1);
+				gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
+
+				//Vertical blur pass
+				default_framebuffer.bind();
+				gl::UseProgram(gaussian_shader);
+				initialize_texture_samplers(gaussian_shader, &["image_texture"]);
+				gl::ActiveTexture(gl::TEXTURE0);
+				gl::BindTexture(gl::TEXTURE_2D, pong_rendertarget.texture);
+				glutil::bind_byte(gaussian_shader, "horizontal", 0);
+				gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
+			} else {
+				default_framebuffer.bind();
+				gl::UseProgram(passthrough_shader);
+				initialize_texture_samplers(gaussian_shader, &["image_texture"]);
+				gl::ActiveTexture(gl::TEXTURE0);
+				gl::BindTexture(gl::TEXTURE_2D, preeffect_rendertarget.texture);
+				gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
+			}
 
 			//Clear the depth buffer before rendering 2D elements
 			gl::Clear(gl::DEPTH_BUFFER_BIT);
