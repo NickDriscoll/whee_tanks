@@ -223,21 +223,6 @@ pub enum Rotating {
     Not
 }
 
-//Actions that can be mapped to buttons/keys
-#[derive(Debug)]
-pub enum Commands {
-    Quit,
-    ToggleWireframe,
-    RotateLeft,
-    RotateRight,
-    MoveForwards,
-    MoveBackwards,
-    StopMoving,
-    StopRotating,
-    ToggleFreecam,
-    TogglePauseMenu
-}
-
 //State that controls what is updated and what is drawn
 pub enum GameState {
     Playing,
@@ -245,4 +230,9 @@ pub enum GameState {
     Paused,
     Pausing,
     Resuming
+}
+
+pub enum ImageEffects {
+    Blur,
+    None
 }

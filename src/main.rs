@@ -9,8 +9,10 @@ use glyph_brush::{ab_glyph::{FontArc, PxScale}, BrushAction, BrushError, GlyphBr
 use ozy_engine::{glutil, routines};
 use ozy_engine::structs::OptionVec;
 use crate::structs::*;
+use crate::input::{Commands, InputType};
 
 mod structs;
+mod input;
 
 const DEFAULT_TEX_PARAMS: [(GLenum, GLenum); 4] = [
 	(gl::TEXTURE_WRAP_S, gl::REPEAT),
@@ -29,7 +31,7 @@ unsafe fn bind_texture_maps(maps: &[GLuint]) {
 
 unsafe fn initialize_texture_samplers(program: GLuint, identifiers: &[&str]) {
 	for i in 0..identifiers.len() {
-		glutil::bind_byte(program, identifiers[i], i as GLint);
+		glutil::bind_int(program, identifiers[i], i as GLint);
 	}
 }
 
@@ -375,17 +377,22 @@ fn main() {
 	//Default keybindings
 	let mut key_bindings = {
 		let mut map = HashMap::new();
-		map.insert((Key::Escape, Action::Press), Commands::TogglePauseMenu);
-		map.insert((Key::Q, Action::Press), Commands::ToggleWireframe);
-		map.insert((Key::W, Action::Press), Commands::MoveForwards);
-		map.insert((Key::S, Action::Press), Commands::MoveBackwards);
-		map.insert((Key::A, Action::Press), Commands::RotateLeft);
-		map.insert((Key::D, Action::Press), Commands::RotateRight);
 
-		map.insert((Key::W, Action::Release), Commands::StopMoving);
-		map.insert((Key::S, Action::Release), Commands::StopMoving);
-		map.insert((Key::A, Action::Release), Commands::StopRotating);
-		map.insert((Key::D, Action::Release), Commands::StopRotating);
+		map.insert((InputType::Key(Key::Escape), Action::Press), Commands::TogglePauseMenu);
+		map.insert((InputType::Key(Key::Escape), Action::Press), Commands::TogglePauseMenu);
+		map.insert((InputType::Key(Key::Q), Action::Press), Commands::ToggleWireframe);
+		map.insert((InputType::Key(Key::W), Action::Press), Commands::MoveForwards);
+		map.insert((InputType::Key(Key::S), Action::Press), Commands::MoveBackwards);
+		map.insert((InputType::Key(Key::A), Action::Press), Commands::RotateLeft);
+		map.insert((InputType::Key(Key::D), Action::Press), Commands::RotateRight);
+
+		map.insert((InputType::Key(Key::W), Action::Release), Commands::StopMoving);
+		map.insert((InputType::Key(Key::S), Action::Release), Commands::StopMoving);
+		map.insert((InputType::Key(Key::A), Action::Release), Commands::StopRotating);
+		map.insert((InputType::Key(Key::D), Action::Release), Commands::StopRotating);
+		
+		map.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Commands::Fire);
+
 		map
 	};
 
@@ -494,9 +501,13 @@ fn main() {
             match event {
 				WindowEvent::Close => { window.set_should_close(true); }
 				WindowEvent::Key(key, _, action, ..) => {
-					match key_bindings.get(&(key, action)) {
-						Some(command) => { command_buffer.push(command); }
-						None => {  }
+					if let Some(command) = key_bindings.get(&(InputType::Key(key), action)) {
+						command_buffer.push(*command);
+					}
+				}
+				WindowEvent::MouseButton(button, action, ..) => {
+					if let Some(command) = key_bindings.get(&(InputType::Mouse(button), action)) {
+						command_buffer.push(*command);
 					}
 				}
 				WindowEvent::CursorPos(x, y) => {
@@ -504,7 +515,6 @@ fn main() {
 					let clipping_space_mouse = glm::vec4(x as f32 / (window_size.0 as f32 / 2.0) - 1.0, -(y as f32 / (window_size.1 as f32 / 2.0) - 1.0), 0.0, 1.0);
 					world_space_mouse = world_from_clipping * clipping_space_mouse;
 				}
-				WindowEvent::MouseButton(MouseButton::Button1, Action::Press, ..) => { tank.firing = true; }
                 _ => {}
             }
         }
@@ -515,7 +525,7 @@ fn main() {
 				Commands::Quit => {
 					window.set_should_close(true);
 				}
-				Commands::ToggleWireframe => unsafe {
+				Commands::ToggleWireframe => {
 					is_wireframe = !is_wireframe;
 				}
 				Commands::MoveForwards => {
@@ -543,6 +553,7 @@ fn main() {
 						_ => {}
 					}
 				}
+				Commands::Fire => { tank.firing = true; }
 				Commands::ToggleFreecam => {
 
 				}
@@ -674,10 +685,12 @@ fn main() {
 					);
 					sections.insert(section);
 				}
+				key_bindings.remove(&(InputType::Mouse(MouseButton::Button1), Action::Press));
 				game_state = GameState::Paused;
 			}
 			GameState::Resuming => {
 				sections.clear();
+				key_bindings.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Commands::Fire);
 				game_state = GameState::Playing;
 			}
 			_ => {}
@@ -779,9 +792,9 @@ fn main() {
 
 		const TEXTURE_MAP_IDENTIFIERS: [&str; 4] = ["albedo_map", "normal_map", "roughness_map", "shadow_map"];
 		unsafe {
-			let blur_flag = match game_state {
-				GameState::Paused => { true }
-				_ => { false }
+			let image_effect = match game_state {
+				GameState::Paused => { ImageEffects::Blur }
+				_ => { ImageEffects::None }
 			};
 
 			//Bind shadow framebuffer
@@ -877,32 +890,41 @@ fn main() {
 			//Apply post-processing effects
 			gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);
 			gl::BindVertexArray(postprocessing_vao);
+			gl::ActiveTexture(gl::TEXTURE0);
 
-			if blur_flag {
-				//Horizontal blur pass
-				pong_rendertarget.bind();
-				gl::UseProgram(gaussian_shader);
-				initialize_texture_samplers(gaussian_shader, &["image_texture"]);
-				gl::ActiveTexture(gl::TEXTURE0);
-				gl::BindTexture(gl::TEXTURE_2D, preeffect_rendertarget.texture);
-				glutil::bind_byte(gaussian_shader, "horizontal", 1);
-				gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
-
-				//Vertical blur pass
-				default_framebuffer.bind();
-				gl::UseProgram(gaussian_shader);
-				initialize_texture_samplers(gaussian_shader, &["image_texture"]);
-				gl::ActiveTexture(gl::TEXTURE0);
-				gl::BindTexture(gl::TEXTURE_2D, pong_rendertarget.texture);
-				glutil::bind_byte(gaussian_shader, "horizontal", 0);
-				gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
-			} else {
-				default_framebuffer.bind();
-				gl::UseProgram(passthrough_shader);
-				initialize_texture_samplers(gaussian_shader, &["image_texture"]);
-				gl::ActiveTexture(gl::TEXTURE0);
-				gl::BindTexture(gl::TEXTURE_2D, preeffect_rendertarget.texture);
-				gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
+			match image_effect {
+				ImageEffects::Blur => {
+					let passes = 4;
+					gl::UseProgram(gaussian_shader);
+					initialize_texture_samplers(gaussian_shader, &["image_texture"]);
+					initialize_texture_samplers(passthrough_shader, &["image_texture"]);
+	
+					for _ in 0..passes {
+						//Horizontal blur pass
+						pong_rendertarget.bind();
+						gl::BindTexture(gl::TEXTURE_2D, preeffect_rendertarget.texture);
+						glutil::bind_int(gaussian_shader, "horizontal", 1);
+						gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
+		
+						//Vertical blur pass
+						preeffect_rendertarget.bind();
+						gl::BindTexture(gl::TEXTURE_2D, pong_rendertarget.texture);
+						glutil::bind_int(gaussian_shader, "horizontal", 0);
+						gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
+					}
+	
+					//Render result to the default framebuffer
+					default_framebuffer.bind();
+					gl::UseProgram(passthrough_shader);
+					gl::BindTexture(gl::TEXTURE_2D, preeffect_rendertarget.texture);
+					gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
+				}
+				ImageEffects::None => {
+					gl::UseProgram(passthrough_shader);
+					default_framebuffer.bind();
+					gl::BindTexture(gl::TEXTURE_2D, preeffect_rendertarget.texture);
+					gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
+				}
 			}
 
 			//Clear the depth buffer before rendering 2D elements

@@ -8,7 +8,7 @@ uniform sampler2D image_texture;
 uniform bool horizontal;
 
 const int TAP = 7; //Must be odd
-const float GAUSSIAN_WEIGHTS[TAP / 2 + 1] = float[](0.055865921787709494, 0.12569832402234637, 0.2011173184357542, 0.2346368715083799);
+const float GAUSSIAN_WEIGHTS[TAP / 2 + 1] = float[](0.2346368, 0.2011173, 0.1256984, 0.0558159);
 
 void main() {
     int bound = TAP / 2;
