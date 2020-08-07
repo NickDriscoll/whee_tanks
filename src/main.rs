@@ -453,7 +453,7 @@ fn main() {
 		Ok(s) => { s }
 		Err(e) => { panic!("{}", e) }
 	};
-	let mut glyph_brush = GlyphBrushBuilder::using_font(font).initial_cache_size((512, 512)).build();
+	let mut glyph_brush = GlyphBrushBuilder::using_font(font).build();
 
 	//Create the glyph texture
 	let glyph_texture = unsafe {
@@ -664,9 +664,10 @@ fn main() {
 				tank.firing = false;
 			}
 			GameState::Pausing => {
-				//Draw the pause menu
+				//Submit the pause menu text
 				sections.clear();
 				let labels = ["Resume", "Settings", "Main Menu", "Exit"];
+				let border_width = 15.0;
 				for i in 0..labels.len() {
 					let y_buffer = 10.0;
 					let mut section = {
@@ -680,8 +681,8 @@ fn main() {
 						None => { continue; }
 					};
 					section.screen_position = (
-						window_size.0 as f32 / 2.0 - bounding_box.width() / 2.0,
-						window_size.1 as f32 / 2.5 + (bounding_box.height() + y_buffer) * i as f32
+						window_size.0 as f32 / 2.0 - (bounding_box.width() + 2.0 * border_width) / 2.0,
+						window_size.1 as f32 / 2.5 + ((bounding_box.height() + 2.0 * border_width) + y_buffer) * i as f32
 					);
 					sections.insert(section);
 				}
@@ -894,7 +895,7 @@ fn main() {
 
 			match image_effect {
 				ImageEffects::Blur => {
-					let passes = 4;
+					let passes = 8;
 					gl::UseProgram(gaussian_shader);
 					initialize_texture_samplers(gaussian_shader, &["image_texture"]);
 					initialize_texture_samplers(passthrough_shader, &["image_texture"]);
