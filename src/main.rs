@@ -109,6 +109,15 @@ extern "system" fn gl_debug_callback(source: GLenum, gltype: GLenum, id: GLuint,
 	println!("Message: {}", m);
 }
 
+fn insert_index_buffer_quad(index_buffer: &mut [u16], i: usize) {
+	index_buffer[i * 6] = 4 * i as u16;
+	index_buffer[i * 6 + 1] = index_buffer[i * 6] + 1;
+	index_buffer[i * 6 + 2] = index_buffer[i * 6] + 2;
+	index_buffer[i * 6 + 3] = index_buffer[i * 6] + 3;
+	index_buffer[i * 6 + 4] = index_buffer[i * 6] + 2;
+	index_buffer[i * 6 + 5] = index_buffer[i * 6] + 1;
+}
+
 fn main() {
 	let mut window_size = (1920, 1080);
 	let mut aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
@@ -203,6 +212,7 @@ fn main() {
 	let glyph_shader = unsafe { glutil::compile_program_from_files("shaders/glyph.vert", "shaders/glyph.frag") };
 	let passthrough_shader = unsafe { glutil::compile_program_from_files("shaders/postprocessing.vert", "shaders/postprocessing.frag") };
 	let gaussian_shader = unsafe { glutil::compile_program_from_files("shaders/postprocessing.vert", "shaders/gaussian_blur.frag") };
+	let ui_program = unsafe { glutil::compile_program_from_files("shaders/ui_button.vert", "shaders/ui_button.frag") }; 
 
 	//Initialize texture caching data structure
 	let mut texture_keeper = TextureKeeper::new();
@@ -397,7 +407,7 @@ fn main() {
 	};
 
 	//Initialize the shadow map
-	let shadow_size = 4096;
+	let shadow_size = 8192;
 	let shadow_rendertarget = unsafe {
 		let mut shadow_framebuffer = 0;
 		let mut shadow_texture = 0;
@@ -483,12 +493,10 @@ fn main() {
 
 	//Array of UI buttons
 	let mut ui_buttons = OptionVec::new();
-	let mut ui_vao = unsafe {
-		let mut v = 0;
-		gl::GenVertexArrays(1, &mut v);
-		v
-	};
+	let mut last_ui_button_count = 0;
+	let mut ui_vao = None;
 
+	//Variable that determines what the update step looks like
 	let mut game_state = GameState::Playing;
 
 	//Main loop
@@ -674,8 +682,8 @@ fn main() {
 			GameState::Pausing => {
 				//Submit the pause menu text
 				sections.clear();
-				let labels = ["Resume", "Settings", "Main Menu", "Exit"];
-				let border_width = 15.0;
+				let labels = ["Resume", "Settings", "Main Menu", "Exit", "Super secret cheating menu for hackers and 1337"];
+				const BORDER_WIDTH: f32 = 15.0;
 				let font_size = 36.0;
 				for i in 0..labels.len() {
 					let y_buffer = 10.0;
@@ -690,12 +698,11 @@ fn main() {
 						None => { continue; }
 					};
 					section.screen_position = (
-						window_size.0 as f32 / 2.0 - (bounding_box.width() + 2.0 * border_width) / 2.0,
-						window_size.1 as f32 / 2.5 + ((bounding_box.height() + 2.0 * border_width) + y_buffer) * i as f32
+						window_size.0 as f32 / 2.0 - (bounding_box.width() + 2.0 * BORDER_WIDTH) / 2.0,
+						window_size.1 as f32 / 2.5 + ((bounding_box.height() + 2.0 * BORDER_WIDTH) + y_buffer) * i as f32
 					);
 
 					//Create the associated UI button
-					const BORDER_WIDTH: f32 = 2.0;
 					let button = glyph_brush::Rectangle {
 						min: [section.screen_position.0 - BORDER_WIDTH, section.screen_position.1 - BORDER_WIDTH],
 						max: [section.screen_position.0 + (bounding_box.max.x - bounding_box.min.x) + BORDER_WIDTH, section.screen_position.1 + (bounding_box.max.y - bounding_box.min.y) + BORDER_WIDTH]
@@ -706,42 +713,19 @@ fn main() {
 					sections.insert(section);
 				}
 
-				//Create vao
-				unsafe { 
-					let button_elements = 4 * 2;
-					gl::DeleteVertexArrays(1, &mut ui_vao);
-					let mut vertices = vec![0.0; ui_buttons.len() * button_elements];
-					let mut indices = vec![0u16; ui_buttons.len() * 6];
-
-					for i in 0..ui_buttons.len() {
-						if let Some(button) = ui_buttons[i] {
-							vertices[i * button_elements] = button.min[0];
-							vertices[i * button_elements + 1] = button.min[1];
-							vertices[i * button_elements + 2] = button.max[0];
-							vertices[i * button_elements + 3] = button.min[1];
-							vertices[i * button_elements + 4] = button.min[0];
-							vertices[i * button_elements + 5] = button.max[1];
-							vertices[i * button_elements + 6] = button.max[0];
-							vertices[i * button_elements + 7] = button.max[1];
-
-							indices[i * button_elements] = (i * button_elements) as u16;
-							indices[i * button_elements + 1] = (i * button_elements + 1) as u16;
-							indices[i * button_elements + 2] = (i * button_elements + 2) as u16;
-							indices[i * button_elements + 3] = (i * button_elements + 3) as u16;
-							indices[i * button_elements + 4] = (i * button_elements + 2) as u16;
-							indices[i * button_elements + 5] = (i * button_elements + 1) as u16;
-						}
-					}
-
-					ui_vao = glutil::create_vertex_array_object(&vertices, &indices, &[2]);
-				}
-
 				key_bindings.remove(&(InputType::Mouse(MouseButton::Button1), Action::Press));
 				game_state = GameState::Paused;
 			}
 			GameState::Resuming => {
+				//Clear all text
 				sections.clear();
+
+				//Clear ui buttons
+				ui_buttons.clear();
+
+				//Re-enable normal controls
 				key_bindings.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Commands::Fire);
+
 				game_state = GameState::Playing;
 			}
 			_ => {}
@@ -773,8 +757,8 @@ fn main() {
 		}, glyph_vertex_transform);
 
 		//Resize the glyph texture if it's too small
-		if let Err(BrushError::TextureTooSmall { suggested }) = glyph_result {
-			println!("Resizing glyph_texture {:?}", suggested);
+		while let Err(BrushError::TextureTooSmall { suggested }) = glyph_result {
+			println!("Resizing glyph_texture to {:?}", suggested);
 			let (width, height) = suggested;
 			unsafe {
 				gl::BindTexture(gl::TEXTURE_2D, glyph_texture);
@@ -802,21 +786,15 @@ fn main() {
 				if verts.len() > 0 {
 					let mut vertex_buffer = Vec::with_capacity(verts.len() * 16);
 					let mut index_buffer = vec![0; verts.len() * 6];
-					for vert in verts.iter() {
-						for v in vert {
+					for i in 0..verts.len() {
+						for v in verts[i].iter() {
 							vertex_buffer.push(*v);
 						}
+						
+						//Fill out index buffer
+						insert_index_buffer_quad(&mut index_buffer, i);
 					}
 					glyph_count = verts.len();
-
-					for i in 0..verts.len() {
-						index_buffer[i * 6] = 4 * i as u16;
-						index_buffer[i * 6 + 1] = index_buffer[i * 6] + 1;
-						index_buffer[i * 6 + 2] = index_buffer[i * 6] + 2;
-						index_buffer[i * 6 + 3] = index_buffer[i * 6] + 3;
-						index_buffer[i * 6 + 4] = index_buffer[i * 6] + 2;
-						index_buffer[i * 6 + 5] = index_buffer[i * 6] + 1;
-					}
 
 					match glyph_vao {
 						Some(mut vao) => unsafe {						
@@ -829,17 +807,54 @@ fn main() {
 					}
 					println!("Rendered new text");
 				} else {
-					match glyph_vao {
-						Some(mut vao) => unsafe {
-							gl::DeleteVertexArrays(1, &mut vao);
-							glyph_vao = None;
-						}
-						None => {}
+					if let Some(mut vao) = glyph_vao {
+						unsafe { gl::DeleteVertexArrays(1, &mut vao); }
+						glyph_vao = None;
 					}
 				}
 			}
 			BrushAction::ReDraw => {}
+		}	
+
+		//Create vao for the ui buttons
+		if ui_buttons.count() > 0 && ui_buttons.count() != last_ui_button_count {
+			unsafe { 
+				let floats_per_button = 4 * 2;
+				let mut vertices = vec![0.0; ui_buttons.len() * floats_per_button];
+				let mut indices = vec![0u16; ui_buttons.len() * 6];
+
+				for i in 0..ui_buttons.len() {
+					if let Some(button) = ui_buttons[i] {
+						vertices[i * floats_per_button] = button.min[0];
+						vertices[i * floats_per_button + 1] = button.min[1];
+						vertices[i * floats_per_button + 2] = button.min[0];
+						vertices[i * floats_per_button + 3] = button.max[1];
+						vertices[i * floats_per_button + 4] = button.max[0];
+						vertices[i * floats_per_button + 5] = button.min[1];
+						vertices[i * floats_per_button + 6] = button.max[0];
+						vertices[i * floats_per_button + 7] = button.max[1];
+
+						insert_index_buffer_quad(&mut indices, i);
+					}
+				}
+
+				match ui_vao {
+					Some(mut vao) => {
+						gl::DeleteVertexArrays(1, &mut vao);
+						ui_vao = Some(glutil::create_vertex_array_object(&vertices, &indices, &[2]));
+					}
+					None => {
+						ui_vao = Some(glutil::create_vertex_array_object(&vertices, &indices, &[2]));
+					}
+				}
+			}
+		} else if ui_buttons.count() == 0 {
+			if let Some(mut vao) = ui_vao {
+				unsafe { gl::DeleteVertexArrays(1, &mut vao); }
+				ui_vao = None;
+			}
 		}
+		last_ui_button_count = ui_buttons.count();
 
 		const TEXTURE_MAP_IDENTIFIERS: [&str; 4] = ["albedo_map", "normal_map", "roughness_map", "shadow_map"];
 		unsafe {
@@ -981,14 +996,25 @@ fn main() {
 			//Clear the depth buffer before rendering 2D elements
 			gl::Clear(gl::DEPTH_BUFFER_BIT);
 
+			//Render buttons
+			if let Some(vao) = ui_vao {
+				gl::UseProgram(ui_program);
+				glutil::bind_matrix4(ui_program, "clipping_from_screen", &clipping_from_screen);
+				gl::BindVertexArray(vao);
+				gl::DrawElements(gl::TRIANGLES, 6 * ui_buttons.len() as GLint, gl::UNSIGNED_SHORT, ptr::null());
+			}
+
+
 			//Render text
 			if let Some(vao) = glyph_vao {
 				gl::UseProgram(glyph_shader);
 				glutil::bind_matrix4(glyph_shader, "clipping_from_screen", &clipping_from_screen);
+				gl::BindVertexArray(vao);
+
 				initialize_texture_samplers(glyph_shader, &["glyph_texture"]);
 				gl::ActiveTexture(gl::TEXTURE0);
 				gl::BindTexture(gl::TEXTURE_2D, glyph_texture);
-				gl::BindVertexArray(vao);
+
 				gl::DrawElements(gl::TRIANGLES, 6 * glyph_count as GLint, gl::UNSIGNED_SHORT, ptr::null());
 			}
 		}
