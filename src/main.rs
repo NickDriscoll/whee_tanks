@@ -481,6 +481,14 @@ fn main() {
 	);
 	let mut sections = OptionVec::new();
 
+	//Array of UI buttons
+	let mut ui_buttons = OptionVec::new();
+	let mut ui_vao = unsafe {
+		let mut v = 0;
+		gl::GenVertexArrays(1, &mut v);
+		v
+	};
+
 	let mut game_state = GameState::Playing;
 
 	//Main loop
@@ -668,12 +676,13 @@ fn main() {
 				sections.clear();
 				let labels = ["Resume", "Settings", "Main Menu", "Exit"];
 				let border_width = 15.0;
+				let font_size = 36.0;
 				for i in 0..labels.len() {
 					let y_buffer = 10.0;
 					let mut section = {
 						let section = Section::new();
 						let mut text = Text::new(labels[i]).with_color([1.0, 1.0, 1.0, 1.0]);
-						text.scale = PxScale::from(36.0);
+						text.scale = PxScale::from(font_size);
 						section.add_text(text)
 					};
 					let bounding_box = match glyph_brush.glyph_bounds(&section) {
@@ -684,8 +693,49 @@ fn main() {
 						window_size.0 as f32 / 2.0 - (bounding_box.width() + 2.0 * border_width) / 2.0,
 						window_size.1 as f32 / 2.5 + ((bounding_box.height() + 2.0 * border_width) + y_buffer) * i as f32
 					);
+
+					//Create the associated UI button
+					const BORDER_WIDTH: f32 = 2.0;
+					let button = glyph_brush::Rectangle {
+						min: [section.screen_position.0 - BORDER_WIDTH, section.screen_position.1 - BORDER_WIDTH],
+						max: [section.screen_position.0 + (bounding_box.max.x - bounding_box.min.x) + BORDER_WIDTH, section.screen_position.1 + (bounding_box.max.y - bounding_box.min.y) + BORDER_WIDTH]
+					};
+					ui_buttons.insert(button);
+
+					//Finally insert the section into the array					
 					sections.insert(section);
 				}
+
+				//Create vao
+				unsafe { 
+					let button_elements = 4 * 2;
+					gl::DeleteVertexArrays(1, &mut ui_vao);
+					let mut vertices = vec![0.0; ui_buttons.len() * button_elements];
+					let mut indices = vec![0u16; ui_buttons.len() * 6];
+
+					for i in 0..ui_buttons.len() {
+						if let Some(button) = ui_buttons[i] {
+							vertices[i * button_elements] = button.min[0];
+							vertices[i * button_elements + 1] = button.min[1];
+							vertices[i * button_elements + 2] = button.max[0];
+							vertices[i * button_elements + 3] = button.min[1];
+							vertices[i * button_elements + 4] = button.min[0];
+							vertices[i * button_elements + 5] = button.max[1];
+							vertices[i * button_elements + 6] = button.max[0];
+							vertices[i * button_elements + 7] = button.max[1];
+
+							indices[i * button_elements] = (i * button_elements) as u16;
+							indices[i * button_elements + 1] = (i * button_elements + 1) as u16;
+							indices[i * button_elements + 2] = (i * button_elements + 2) as u16;
+							indices[i * button_elements + 3] = (i * button_elements + 3) as u16;
+							indices[i * button_elements + 4] = (i * button_elements + 2) as u16;
+							indices[i * button_elements + 5] = (i * button_elements + 1) as u16;
+						}
+					}
+
+					ui_vao = glutil::create_vertex_array_object(&vertices, &indices, &[2]);
+				}
+
 				key_bindings.remove(&(InputType::Mouse(MouseButton::Button1), Action::Press));
 				game_state = GameState::Paused;
 			}

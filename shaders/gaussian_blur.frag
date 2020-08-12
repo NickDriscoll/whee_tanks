@@ -11,21 +11,23 @@ const int TAP = 7; //Must be odd
 const int BOUND = TAP / 2;
 const float GAUSSIAN_WEIGHTS[TAP / 2 + 1] = float[](0.2346368, 0.2011173, 0.1256984, 0.0558159);
 
+vec3 do_blur(vec2 uv_offset, vec2 texel_size) {
+    vec3 result = vec3(0.0);
+    for (int i = -BOUND; i <= BOUND; i++) {
+        float weight = GAUSSIAN_WEIGHTS[abs(i)];
+        vec3 sample = texture(image_texture, f_uvs + i * uv_offset * texel_size).xyz;
+        result += sample * weight;
+    }
+    return result;
+}
+
 void main() {
     vec2 texel_size = 1.0 / textureSize(image_texture, 0);
     vec3 result = vec3(0.0);
     if (horizontal) {
-        for (int i = -BOUND; i <= BOUND; i++) {
-            float weight = GAUSSIAN_WEIGHTS[abs(i)];
-            vec3 sample = texture(image_texture, f_uvs + vec2(i, 0) * texel_size).xyz;
-            result += sample * weight;
-        }
+        result = do_blur(vec2(1.0, 0.0), texel_size);
     } else {
-        for (int i = -BOUND; i <= BOUND; i++) {
-            float weight = GAUSSIAN_WEIGHTS[abs(i)];
-            vec3 sample = texture(image_texture, f_uvs + vec2(0, i) * texel_size).xyz;
-            result += sample * weight;
-        }
+        result = do_blur(vec2(0.0, 1.0), texel_size);
     }
     frag_color = vec4(result, 1.0);
 }
