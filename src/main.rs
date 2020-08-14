@@ -118,6 +118,25 @@ fn insert_index_buffer_quad(index_buffer: &mut [u16], i: usize) {
 	index_buffer[i * 6 + 5] = index_buffer[i * 6] + 1;
 }
 
+const FLOATS_PER_COLOR: usize = 4;
+const COLORS_PER_BUTTON: usize = 4;
+unsafe fn update_ui_button_color_buffer(buffer: GLuint, index: usize, color: [f32; FLOATS_PER_COLOR]) {
+	let mut data = vec![0.0; FLOATS_PER_COLOR * COLORS_PER_BUTTON];
+	for i in 0..(data.len() / FLOATS_PER_COLOR) {
+		data[i * FLOATS_PER_COLOR] = color[0];
+		data[i * FLOATS_PER_COLOR + 1] = color[1];
+		data[i * FLOATS_PER_COLOR + 2] = color[2];
+		data[i * FLOATS_PER_COLOR + 3] = color[3];
+	}
+	unsafe {
+		gl::BindBuffer(gl::ARRAY_BUFFER, buffer);
+		gl::BufferSubData(gl::ARRAY_BUFFER,
+						(COLORS_PER_BUTTON * FLOATS_PER_COLOR * index * mem::size_of::<GLfloat>()) as GLintptr,
+						(FLOATS_PER_COLOR * COLORS_PER_BUTTON * mem::size_of::<GLfloat>()) as GLsizeiptr,
+						&data[0] as *const f32 as *const c_void);
+	}
+}
+
 fn main() {
 	let mut window_size = (1920, 1080);
 	let mut aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
@@ -377,8 +396,11 @@ fn main() {
 
 	let mut last_frame_instant = Instant::now();
 	let mut elapsed_time = 0.0;
+
 	let mut world_space_mouse = world_from_clipping * glm::vec4(0.0, 0.0, 0.0, 1.0);
-	let mut screen_space_mouse = (0.0, 0.0);
+	let mut screen_space_mouse = glm::vec2(0.0, 0.0);
+	let mut mouse_lbutton_pressed = false;
+	let mut last_mouse_lbutton_pressed = false;
 
 	let mut is_wireframe = false;
 
@@ -493,7 +515,7 @@ fn main() {
 	let mut sections = OptionVec::new();
 
 	//Array of UI buttons
-	let mut ui_buttons: OptionVec<glyph_brush::Rectangle<f32>> = OptionVec::new();
+	let mut ui_buttons: OptionVec<UIButton> = OptionVec::new();
 	let mut last_ui_button_count = 0;
 	let mut ui_vao = None;
 	let mut button_color_instanced_buffer = 0;
@@ -527,10 +549,16 @@ fn main() {
 					if let Some(command) = key_bindings.get(&(InputType::Mouse(button), action)) {
 						command_buffer.push(*command);
 					}
+
+					if action == Action::Press {
+						mouse_lbutton_pressed = true;
+					} else {						
+						mouse_lbutton_pressed = false;
+					}
 				}
 				WindowEvent::CursorPos(x, y) => {
 					//We have to flip the y coordinate because glfw thinks (0, 0) is in the top left
-					screen_space_mouse = (x as f32, y as f32);
+					screen_space_mouse = glm::vec2(x as f32, y as f32);
 					let clipping_space_mouse = glm::vec4(x as f32 / (window_size.0 as f32 / 2.0) - 1.0, -(y as f32 / (window_size.1 as f32 / 2.0) - 1.0), 0.0, 1.0);
 					world_space_mouse = world_from_clipping * clipping_space_mouse;
 				}
@@ -684,12 +712,28 @@ fn main() {
 			}
 			GameState::Paused => {
 				for i in 0..ui_buttons.len() {
-					if let Some(button) = ui_buttons[i] {
-						if screen_space_mouse.0 > button.min[0] &&
-						   screen_space_mouse.0 < button.max[0] &&
-						   screen_space_mouse.1 > button.min[1] &&
-						   screen_space_mouse.1 < button.max[1] {
-							println!("Touched button!");
+					if let Some(button) = &mut ui_buttons[i] {
+						if screen_space_mouse.x > button.bounds.min[0] &&
+						   screen_space_mouse.x < button.bounds.max[0] &&
+						   screen_space_mouse.y > button.bounds.min[1] &&
+						   screen_space_mouse.y < button.bounds.max[1] {
+							if button.state == ButtonState::None || (mouse_lbutton_pressed == last_mouse_lbutton_pressed) {
+								let color = if mouse_lbutton_pressed {
+									[0.0, 0.8, 0.0, 0.5]
+								} else {
+									[0.0, 0.4, 0.0, 0.5]
+								};
+								unsafe { update_ui_button_color_buffer(button_color_instanced_buffer, i, color); }
+
+								button.state = ButtonState::Hovering;
+							}
+						} else {
+							if button.state != ButtonState::None {
+								let color = [0.0, 0.0, 0.0, 0.5];
+								unsafe { update_ui_button_color_buffer(button_color_instanced_buffer, i, color); }
+
+								button.state = ButtonState::None;
+							}
 						}
 					}
 				}
@@ -718,10 +762,12 @@ fn main() {
 					);
 
 					//Create the associated UI button
-					let button = glyph_brush::Rectangle {
+					let button_bounds = glyph_brush::Rectangle {
 						min: [section.screen_position.0 - BORDER_WIDTH, section.screen_position.1 - BORDER_WIDTH],
 						max: [section.screen_position.0 + (bounding_box.max.x - bounding_box.min.x) + BORDER_WIDTH, section.screen_position.1 + (bounding_box.max.y - bounding_box.min.y) + BORDER_WIDTH]
 					};
+					let button = UIButton::new(button_bounds);
+
 					ui_buttons.insert(button);
 
 					//Finally insert the section into the array					
@@ -745,7 +791,7 @@ fn main() {
 			}
 			_ => {}
 		}
-
+		last_mouse_lbutton_pressed = mouse_lbutton_pressed;
 
 		//-----------Rendering-----------
 
@@ -839,16 +885,17 @@ fn main() {
 				let mut indices = vec![0u16; ui_buttons.len() * 6];
 
 				for i in 0..ui_buttons.len() {
-					if let Some(button) = ui_buttons[i] {
-						vertices[i * floats_per_button] = button.min[0];
-						vertices[i * floats_per_button + 1] = button.min[1];
-						vertices[i * floats_per_button + 2] = button.min[0];
-						vertices[i * floats_per_button + 3] = button.max[1];
-						vertices[i * floats_per_button + 4] = button.max[0];
-						vertices[i * floats_per_button + 5] = button.min[1];
-						vertices[i * floats_per_button + 6] = button.max[0];
-						vertices[i * floats_per_button + 7] = button.max[1];
+					if let Some(button) = &ui_buttons[i] {
+						vertices[i * floats_per_button] = button.bounds.min[0];
+						vertices[i * floats_per_button + 1] = button.bounds.min[1];
+						vertices[i * floats_per_button + 2] = button.bounds.min[0];
+						vertices[i * floats_per_button + 3] = button.bounds.max[1];
+						vertices[i * floats_per_button + 4] = button.bounds.max[0];
+						vertices[i * floats_per_button + 5] = button.bounds.min[1];
+						vertices[i * floats_per_button + 6] = button.bounds.max[0];
+						vertices[i * floats_per_button + 7] = button.bounds.max[1];
 
+						//Place this quad in the index buffer
 						insert_index_buffer_quad(&mut indices, i);
 					}
 				}
@@ -868,11 +915,10 @@ fn main() {
 
 				//Create GPU buffer for ui button colors
 				button_color_instanced_buffer = {
-					let floats_per_element = 4;
-					let element_count = ui_buttons.len() * 4;
+					let element_count = ui_buttons.len() * COLORS_PER_BUTTON;
 
-					let mut data = vec![0.0f32; element_count * floats_per_element];
-					for i in 0..(data.len() / floats_per_element) {
+					let mut data = vec![0.0f32; element_count * FLOATS_PER_COLOR];
+					for i in 0..(data.len() / FLOATS_PER_COLOR) {
 						data[i * 4] = 0.0;
 						data[i * 4 + 1] = 0.0;
 						data[i * 4 + 2] = 0.0;
@@ -882,14 +928,14 @@ fn main() {
 					let mut b = 0;
 					gl::GenBuffers(1, &mut b);
 					gl::BindBuffer(gl::ARRAY_BUFFER, b);
-					gl::BufferData(gl::ARRAY_BUFFER, (element_count * floats_per_element * mem::size_of::<GLfloat>()) as GLsizeiptr, &data[0] as *const f32 as *const c_void, gl::DYNAMIC_DRAW);
+					gl::BufferData(gl::ARRAY_BUFFER, (element_count * FLOATS_PER_COLOR * mem::size_of::<GLfloat>()) as GLsizeiptr, &data[0] as *const f32 as *const c_void, gl::DYNAMIC_DRAW);
 
 					//Attach buffer to vao
 					gl::VertexAttribPointer(1,
 											4,
 											gl::FLOAT,
 											gl::FALSE,
-											(floats_per_element * mem::size_of::<GLfloat>()) as GLsizei,
+											(FLOATS_PER_COLOR * mem::size_of::<GLfloat>()) as GLsizei,
 											ptr::null());
 					gl::EnableVertexAttribArray(1);
 
