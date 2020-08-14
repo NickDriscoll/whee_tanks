@@ -212,7 +212,7 @@ fn main() {
 	let glyph_shader = unsafe { glutil::compile_program_from_files("shaders/glyph.vert", "shaders/glyph.frag") };
 	let passthrough_shader = unsafe { glutil::compile_program_from_files("shaders/postprocessing.vert", "shaders/postprocessing.frag") };
 	let gaussian_shader = unsafe { glutil::compile_program_from_files("shaders/postprocessing.vert", "shaders/gaussian_blur.frag") };
-	let ui_program = unsafe { glutil::compile_program_from_files("shaders/ui_button.vert", "shaders/ui_button.frag") }; 
+	let ui_program = unsafe { glutil::compile_program_from_files("shaders/ui_button.vert", "shaders/ui_button.frag") };
 
 	//Initialize texture caching data structure
 	let mut texture_keeper = TextureKeeper::new();
@@ -359,7 +359,7 @@ fn main() {
 	//OptionVec of all fired tank shells
 	let mut shells: OptionVec<Shell> = OptionVec::new();
 
-	//The view-projection matrix is constant
+	//Initialize some constant transforms
 	let view_from_world = glm::mat4(-1.0, 0.0, 0.0, 0.0,
 								0.0, 1.0, 0.0, 0.0,
 								0.0, 0.0, 1.0, 0.0,
@@ -378,6 +378,7 @@ fn main() {
 	let mut last_frame_instant = Instant::now();
 	let mut elapsed_time = 0.0;
 	let mut world_space_mouse = world_from_clipping * glm::vec4(0.0, 0.0, 0.0, 1.0);
+	let mut screen_space_mouse = (0.0, 0.0);
 
 	let mut is_wireframe = false;
 
@@ -492,9 +493,10 @@ fn main() {
 	let mut sections = OptionVec::new();
 
 	//Array of UI buttons
-	let mut ui_buttons = OptionVec::new();
+	let mut ui_buttons: OptionVec<glyph_brush::Rectangle<f32>> = OptionVec::new();
 	let mut last_ui_button_count = 0;
 	let mut ui_vao = None;
+	let mut button_color_instanced_buffer = 0;
 
 	//Variable that determines what the update step looks like
 	let mut game_state = GameState::Playing;
@@ -528,6 +530,7 @@ fn main() {
 				}
 				WindowEvent::CursorPos(x, y) => {
 					//We have to flip the y coordinate because glfw thinks (0, 0) is in the top left
+					screen_space_mouse = (x as f32, y as f32);
 					let clipping_space_mouse = glm::vec4(x as f32 / (window_size.0 as f32 / 2.0) - 1.0, -(y as f32 / (window_size.1 as f32 / 2.0) - 1.0), 0.0, 1.0);
 					world_space_mouse = world_from_clipping * clipping_space_mouse;
 				}
@@ -679,10 +682,22 @@ fn main() {
 				}
 				tank.firing = false;
 			}
+			GameState::Paused => {
+				for i in 0..ui_buttons.len() {
+					if let Some(button) = ui_buttons[i] {
+						if screen_space_mouse.0 > button.min[0] &&
+						   screen_space_mouse.0 < button.max[0] &&
+						   screen_space_mouse.1 > button.min[1] &&
+						   screen_space_mouse.1 < button.max[1] {
+							println!("Touched button!");
+						}
+					}
+				}
+			}
 			GameState::Pausing => {
 				//Submit the pause menu text
 				sections.clear();
-				let labels = ["Resume", "Settings", "Main Menu", "Exit", "Super secret cheating menu for hackers and 1337"];
+				let labels = ["Resume", "Settings", "Main Menu", "Exit"];
 				const BORDER_WIDTH: f32 = 15.0;
 				let font_size = 36.0;
 				for i in 0..labels.len() {
@@ -842,11 +857,44 @@ fn main() {
 					Some(mut vao) => {
 						gl::DeleteVertexArrays(1, &mut vao);
 						ui_vao = Some(glutil::create_vertex_array_object(&vertices, &indices, &[2]));
+						gl::BindVertexArray(vao);
 					}
 					None => {
-						ui_vao = Some(glutil::create_vertex_array_object(&vertices, &indices, &[2]));
+						let vao = glutil::create_vertex_array_object(&vertices, &indices, &[2]);
+						ui_vao = Some(vao);
+						gl::BindVertexArray(vao);
 					}
 				}
+
+				//Create GPU buffer for ui button colors
+				button_color_instanced_buffer = {
+					let floats_per_element = 4;
+					let element_count = ui_buttons.len() * 4;
+
+					let mut data = vec![0.0f32; element_count * floats_per_element];
+					for i in 0..(data.len() / floats_per_element) {
+						data[i * 4] = 0.0;
+						data[i * 4 + 1] = 0.0;
+						data[i * 4 + 2] = 0.0;
+						data[i * 4 + 3] = 0.5;
+					}
+
+					let mut b = 0;
+					gl::GenBuffers(1, &mut b);
+					gl::BindBuffer(gl::ARRAY_BUFFER, b);
+					gl::BufferData(gl::ARRAY_BUFFER, (element_count * floats_per_element * mem::size_of::<GLfloat>()) as GLsizeiptr, &data[0] as *const f32 as *const c_void, gl::DYNAMIC_DRAW);
+
+					//Attach buffer to vao
+					gl::VertexAttribPointer(1,
+											4,
+											gl::FLOAT,
+											gl::FALSE,
+											(floats_per_element * mem::size_of::<GLfloat>()) as GLsizei,
+											ptr::null());
+					gl::EnableVertexAttribArray(1);
+
+					b
+				};
 			}
 		} else if ui_buttons.count() == 0 {
 			if let Some(mut vao) = ui_vao {
