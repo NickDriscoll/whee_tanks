@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::ptr;
 use ozy_engine::{glutil, routines};
 use crate::DEFAULT_TEX_PARAMS;
+use crate::input::*;
 
 pub struct StaticGeometry {
     pub vao: GLuint,
@@ -204,23 +205,22 @@ impl RenderTarget {
     }
 
     pub unsafe fn bind(&self) {
-        gl::BindFramebuffer(gl::FRAMEBUFFER, self.framebuffer.name);
-        gl::Viewport(0, 0, self.framebuffer.size.0, self.framebuffer.size.1);
-        gl::Clear(self.framebuffer.clear_flags);
-        gl::CullFace(self.framebuffer.cull_face);
+        self.framebuffer.bind();
     }
 }
 
 pub struct UIButton {
     pub bounds: glyph_brush::Rectangle<f32>,
-    pub state: ButtonState
+    pub state: ButtonState,
+    pub command: Command
 }
 
 impl UIButton {
-    pub fn new(bounds: glyph_brush::Rectangle<f32>) -> Self {
+    pub fn new(bounds: glyph_brush::Rectangle<f32>, command: Command) -> Self {
         UIButton {
             bounds,
-            state: ButtonState::None
+            state: ButtonState::None,
+            command
         }
     }
 }
@@ -253,7 +253,7 @@ pub enum GameState {
     Resuming
 }
 
-pub enum ImageEffects {
+pub enum ImageEffect {
     Blur,
     None
 }

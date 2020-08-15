@@ -6,7 +6,8 @@ pub enum InputType {
 
 //Actions that can be mapped to buttons/keys
 #[derive(Debug, Clone, Copy)]
-pub enum Commands {
+pub enum Command {
+    NOP,
     Quit,
     ToggleWireframe,
     RotateLeft,

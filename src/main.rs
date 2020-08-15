@@ -9,7 +9,7 @@ use glyph_brush::{ab_glyph::{FontArc, PxScale}, BrushAction, BrushError, GlyphBr
 use ozy_engine::{glutil, routines};
 use ozy_engine::structs::OptionVec;
 use crate::structs::*;
-use crate::input::{Commands, InputType};
+use crate::input::{Command, InputType};
 
 mod structs;
 mod input;
@@ -30,6 +30,7 @@ unsafe fn bind_texture_maps(maps: &[GLuint]) {
 }
 
 unsafe fn initialize_texture_samplers(program: GLuint, identifiers: &[&str]) {
+	gl::UseProgram(program);
 	for i in 0..identifiers.len() {
 		glutil::bind_int(program, identifiers[i], i as GLint);
 	}
@@ -128,13 +129,18 @@ unsafe fn update_ui_button_color_buffer(buffer: GLuint, index: usize, color: [f3
 		data[i * FLOATS_PER_COLOR + 2] = color[2];
 		data[i * FLOATS_PER_COLOR + 3] = color[3];
 	}
-	unsafe {
-		gl::BindBuffer(gl::ARRAY_BUFFER, buffer);
-		gl::BufferSubData(gl::ARRAY_BUFFER,
-						(COLORS_PER_BUTTON * FLOATS_PER_COLOR * index * mem::size_of::<GLfloat>()) as GLintptr,
-						(FLOATS_PER_COLOR * COLORS_PER_BUTTON * mem::size_of::<GLfloat>()) as GLsizeiptr,
-						&data[0] as *const f32 as *const c_void);
-	}
+	gl::BindBuffer(gl::ARRAY_BUFFER, buffer);
+	gl::BufferSubData(gl::ARRAY_BUFFER,
+					(COLORS_PER_BUTTON * FLOATS_PER_COLOR * index * mem::size_of::<GLfloat>()) as GLintptr,
+					(FLOATS_PER_COLOR * COLORS_PER_BUTTON * mem::size_of::<GLfloat>()) as GLsizeiptr,
+					&data[0] as *const f32 as *const c_void);
+}
+
+pub unsafe fn draw_ui_element(vao: GLuint, shader: GLuint, count: usize, clipping_from_screen: &glm::TMat4<f32>) {
+    gl::UseProgram(shader);
+	glutil::bind_matrix4(shader, "clipping_from_screen", &clipping_from_screen);
+	gl::BindVertexArray(vao);
+	gl::DrawElements(gl::TRIANGLES, 6 * count as GLint, gl::UNSIGNED_SHORT, ptr::null());    
 }
 
 fn main() {
@@ -197,15 +203,16 @@ fn main() {
 		gl::DebugMessageControl(gl::DONT_CARE, gl::DONT_CARE, gl::DONT_CARE, 0, ptr::null(), gl::TRUE);
 	}
 
-	//This is the framebuffer that the 3D scene is rendered to before image effects are applied
-	let (preeffect_rendertarget, pong_rendertarget) = unsafe {
+	//Framebuffers used for image effects
+	let ping_pong_targets = unsafe {
 		let size = (window_size.0 as GLint, window_size.1 as GLint);
 		let pre = RenderTarget::new(size);
 		let post = RenderTarget::new(size);
-		(pre, post)
+		[pre, post]
 	};
 
-	//Screen filling triangle with uvs chosen so that the sampled image exactly covers the screen
+
+	//Screen filling triangle with uvs chosen such that the sampled image exactly covers the screen
 	let postprocessing_vao = unsafe {
 		let vs = [
 			-1.0, -1.0, 0.0, 0.0,
@@ -231,7 +238,7 @@ fn main() {
 	let glyph_shader = unsafe { glutil::compile_program_from_files("shaders/glyph.vert", "shaders/glyph.frag") };
 	let passthrough_shader = unsafe { glutil::compile_program_from_files("shaders/postprocessing.vert", "shaders/postprocessing.frag") };
 	let gaussian_shader = unsafe { glutil::compile_program_from_files("shaders/postprocessing.vert", "shaders/gaussian_blur.frag") };
-	let ui_program = unsafe { glutil::compile_program_from_files("shaders/ui_button.vert", "shaders/ui_button.frag") };
+	let ui_shader = unsafe { glutil::compile_program_from_files("shaders/ui_button.vert", "shaders/ui_button.frag") };
 
 	//Initialize texture caching data structure
 	let mut texture_keeper = TextureKeeper::new();
@@ -404,27 +411,27 @@ fn main() {
 
 	let mut is_wireframe = false;
 
-	//Each frame this is filled with commands, then drained when processed
+	//Each frame this is filled with Command, then drained when processed
 	let mut command_buffer = Vec::new();
 
 	//Default keybindings
 	let mut key_bindings = {
 		let mut map = HashMap::new();
 
-		map.insert((InputType::Key(Key::Escape), Action::Press), Commands::TogglePauseMenu);
-		map.insert((InputType::Key(Key::Escape), Action::Press), Commands::TogglePauseMenu);
-		map.insert((InputType::Key(Key::Q), Action::Press), Commands::ToggleWireframe);
-		map.insert((InputType::Key(Key::W), Action::Press), Commands::MoveForwards);
-		map.insert((InputType::Key(Key::S), Action::Press), Commands::MoveBackwards);
-		map.insert((InputType::Key(Key::A), Action::Press), Commands::RotateLeft);
-		map.insert((InputType::Key(Key::D), Action::Press), Commands::RotateRight);
+		map.insert((InputType::Key(Key::Escape), Action::Press), Command::TogglePauseMenu);
+		map.insert((InputType::Key(Key::Escape), Action::Press), Command::TogglePauseMenu);
+		map.insert((InputType::Key(Key::Q), Action::Press), Command::ToggleWireframe);
+		map.insert((InputType::Key(Key::W), Action::Press), Command::MoveForwards);
+		map.insert((InputType::Key(Key::S), Action::Press), Command::MoveBackwards);
+		map.insert((InputType::Key(Key::A), Action::Press), Command::RotateLeft);
+		map.insert((InputType::Key(Key::D), Action::Press), Command::RotateRight);
 
-		map.insert((InputType::Key(Key::W), Action::Release), Commands::StopMoving);
-		map.insert((InputType::Key(Key::S), Action::Release), Commands::StopMoving);
-		map.insert((InputType::Key(Key::A), Action::Release), Commands::StopRotating);
-		map.insert((InputType::Key(Key::D), Action::Release), Commands::StopRotating);
+		map.insert((InputType::Key(Key::W), Action::Release), Command::StopMoving);
+		map.insert((InputType::Key(Key::S), Action::Release), Command::StopMoving);
+		map.insert((InputType::Key(Key::A), Action::Release), Command::StopRotating);
+		map.insert((InputType::Key(Key::D), Action::Release), Command::StopRotating);
 		
-		map.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Commands::Fire);
+		map.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
 
 		map
 	};
@@ -522,6 +529,7 @@ fn main() {
 
 	//Variable that determines what the update step looks like
 	let mut game_state = GameState::Playing;
+	let mut image_effect = ImageEffect::None;
 
 	//Main loop
     while !window.should_close() {
@@ -564,46 +572,81 @@ fn main() {
 				}
                 _ => {}
             }
-        }
+		}
 		
-		//Process the generated Commands
+		//Handle input from the UI buttons
+		for i in 0..ui_buttons.len() {
+			if let Some(button) = &mut ui_buttons[i] {
+				if screen_space_mouse.x > button.bounds.min[0] &&
+				   screen_space_mouse.x < button.bounds.max[0] &&
+				   screen_space_mouse.y > button.bounds.min[1] &&
+				   screen_space_mouse.y < button.bounds.max[1] {
+
+					if last_mouse_lbutton_pressed && !mouse_lbutton_pressed {
+						command_buffer.push(button.command);
+					}
+
+					//Handle updating button graphics
+					if button.state == ButtonState::None || (mouse_lbutton_pressed == last_mouse_lbutton_pressed) {
+						let color = if mouse_lbutton_pressed {
+							[0.0, 0.8, 0.0, 0.5]
+						} else {
+							[0.0, 0.4, 0.0, 0.5]
+						};
+						unsafe { update_ui_button_color_buffer(button_color_instanced_buffer, i, color); }
+
+						button.state = ButtonState::Hovering;
+					}
+				} else {
+					if button.state != ButtonState::None {
+						let color = [0.0, 0.0, 0.0, 0.5];
+						unsafe { update_ui_button_color_buffer(button_color_instanced_buffer, i, color); }
+
+						button.state = ButtonState::None;
+					}
+				}
+			}
+		}
+		
+		//Process the generated commands
 		for command in command_buffer.drain(0..command_buffer.len()) {
 			match command {
-				Commands::Quit => {
+				Command::Quit => {
 					window.set_should_close(true);
 				}
-				Commands::ToggleWireframe => {
+				Command::ToggleWireframe => {
 					is_wireframe = !is_wireframe;
 				}
-				Commands::MoveForwards => {
+				Command::MoveForwards => {
 					tank.move_state = TankMoving::Forwards;
 				}
-				Commands::MoveBackwards => {
+				Command::MoveBackwards => {
 					tank.move_state = TankMoving::Backwards;
 				}
-				Commands::RotateLeft => {
+				Command::RotateLeft => {
 					tank.tank_rotating = Rotating::Left;
 				}
-				Commands::RotateRight => {
+				Command::RotateRight => {
 					tank.tank_rotating = Rotating::Right;
 				}
-				Commands::StopMoving => {
+				Command::StopMoving => {
 					tank.move_state = TankMoving::Not;
 				}
-				Commands::StopRotating => {
+				Command::StopRotating => {
 					tank.tank_rotating = Rotating::Not;
 				}
-				Commands::TogglePauseMenu => {
+				Command::TogglePauseMenu => {
 					match game_state {
 						GameState::Paused => { game_state = GameState::Resuming; }
 						GameState::Playing => { game_state = GameState::Pausing; }
 						_ => {}
 					}
 				}
-				Commands::Fire => { tank.firing = true; }
-				Commands::ToggleFreecam => {
+				Command::Fire => { tank.firing = true; }
+				Command::ToggleFreecam => {
 
 				}
+				Command::NOP => {}
 			}
 		}
 
@@ -710,38 +753,12 @@ fn main() {
 				}
 				tank.firing = false;
 			}
-			GameState::Paused => {
-				for i in 0..ui_buttons.len() {
-					if let Some(button) = &mut ui_buttons[i] {
-						if screen_space_mouse.x > button.bounds.min[0] &&
-						   screen_space_mouse.x < button.bounds.max[0] &&
-						   screen_space_mouse.y > button.bounds.min[1] &&
-						   screen_space_mouse.y < button.bounds.max[1] {
-							if button.state == ButtonState::None || (mouse_lbutton_pressed == last_mouse_lbutton_pressed) {
-								let color = if mouse_lbutton_pressed {
-									[0.0, 0.8, 0.0, 0.5]
-								} else {
-									[0.0, 0.4, 0.0, 0.5]
-								};
-								unsafe { update_ui_button_color_buffer(button_color_instanced_buffer, i, color); }
-
-								button.state = ButtonState::Hovering;
-							}
-						} else {
-							if button.state != ButtonState::None {
-								let color = [0.0, 0.0, 0.0, 0.5];
-								unsafe { update_ui_button_color_buffer(button_color_instanced_buffer, i, color); }
-
-								button.state = ButtonState::None;
-							}
-						}
-					}
-				}
-			}
+			GameState::Paused => {}
 			GameState::Pausing => {
 				//Submit the pause menu text
 				sections.clear();
 				let labels = ["Resume", "Settings", "Main Menu", "Exit"];
+				let commands = [Command::TogglePauseMenu, Command::NOP, Command::NOP, Command::Quit];
 				const BORDER_WIDTH: f32 = 15.0;
 				let font_size = 36.0;
 				for i in 0..labels.len() {
@@ -766,7 +783,7 @@ fn main() {
 						min: [section.screen_position.0 - BORDER_WIDTH, section.screen_position.1 - BORDER_WIDTH],
 						max: [section.screen_position.0 + (bounding_box.max.x - bounding_box.min.x) + BORDER_WIDTH, section.screen_position.1 + (bounding_box.max.y - bounding_box.min.y) + BORDER_WIDTH]
 					};
-					let button = UIButton::new(button_bounds);
+					let button = UIButton::new(button_bounds, commands[i]);
 
 					ui_buttons.insert(button);
 
@@ -776,6 +793,7 @@ fn main() {
 
 				key_bindings.remove(&(InputType::Mouse(MouseButton::Button1), Action::Press));
 				game_state = GameState::Paused;
+				image_effect = ImageEffect::Blur;
 			}
 			GameState::Resuming => {
 				//Clear all text
@@ -785,9 +803,10 @@ fn main() {
 				ui_buttons.clear();
 
 				//Re-enable normal controls
-				key_bindings.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Commands::Fire);
+				key_bindings.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
 
 				game_state = GameState::Playing;
+				image_effect = ImageEffect::None;
 			}
 			_ => {}
 		}
@@ -817,7 +836,7 @@ fn main() {
 			);
 		}, glyph_vertex_transform);
 
-		//Resize the glyph texture if it's too small
+		//Repeatedly resize the glyph texture until the error stops
 		while let Err(BrushError::TextureTooSmall { suggested }) = glyph_result {
 			println!("Resizing glyph_texture to {:?}", suggested);
 			let (width, height) = suggested;
@@ -866,7 +885,6 @@ fn main() {
 							glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &[2, 2]));
 						}
 					}
-					println!("Rendered new text");
 				} else {
 					if let Some(mut vao) = glyph_vao {
 						unsafe { gl::DeleteVertexArrays(1, &mut vao); }
@@ -952,11 +970,6 @@ fn main() {
 
 		const TEXTURE_MAP_IDENTIFIERS: [&str; 4] = ["albedo_map", "normal_map", "roughness_map", "shadow_map"];
 		unsafe {
-			let image_effect = match game_state {
-				GameState::Paused => { ImageEffects::Blur }
-				_ => { ImageEffects::None }
-			};
-
 			//Bind shadow framebuffer
 			shadow_rendertarget.bind();
 
@@ -986,7 +999,7 @@ fn main() {
 			gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
 
 			//Main scene rendering
-			preeffect_rendertarget.bind();
+			ping_pong_targets[0].bind();
 			
 			//Set polygon fill mode
 			if is_wireframe { gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE); }
@@ -1052,37 +1065,35 @@ fn main() {
 			gl::BindVertexArray(postprocessing_vao);
 			gl::ActiveTexture(gl::TEXTURE0);
 
+			//Apply the active image effect
 			match image_effect {
-				ImageEffects::Blur => {
+				ImageEffect::Blur => {
 					let passes = 8;
-					gl::UseProgram(gaussian_shader);
-					initialize_texture_samplers(gaussian_shader, &["image_texture"]);
 					initialize_texture_samplers(passthrough_shader, &["image_texture"]);
+					initialize_texture_samplers(gaussian_shader, &["image_texture"]);
 	
+					gl::UseProgram(gaussian_shader);
 					for _ in 0..passes {
-						//Horizontal blur pass
-						pong_rendertarget.bind();
-						gl::BindTexture(gl::TEXTURE_2D, preeffect_rendertarget.texture);
-						glutil::bind_int(gaussian_shader, "horizontal", 1);
-						gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
-		
-						//Vertical blur pass
-						preeffect_rendertarget.bind();
-						gl::BindTexture(gl::TEXTURE_2D, pong_rendertarget.texture);
-						glutil::bind_int(gaussian_shader, "horizontal", 0);
-						gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
+						let flags = [1, 0];
+						//Do a horizontal pass followed by a vertical one. This reduces complexity from N^2 to 2N
+						for i in 0..ping_pong_targets.len() {
+							ping_pong_targets[i ^ 1].bind();
+							gl::BindTexture(gl::TEXTURE_2D, ping_pong_targets[i].texture);
+							glutil::bind_int(gaussian_shader, "horizontal", flags[i]);
+							gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
+						}
 					}
 	
 					//Render result to the default framebuffer
 					default_framebuffer.bind();
 					gl::UseProgram(passthrough_shader);
-					gl::BindTexture(gl::TEXTURE_2D, preeffect_rendertarget.texture);
+					gl::BindTexture(gl::TEXTURE_2D, ping_pong_targets[0].texture);
 					gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
 				}
-				ImageEffects::None => {
-					gl::UseProgram(passthrough_shader);
+				ImageEffect::None => {
 					default_framebuffer.bind();
-					gl::BindTexture(gl::TEXTURE_2D, preeffect_rendertarget.texture);
+					gl::UseProgram(passthrough_shader);
+					gl::BindTexture(gl::TEXTURE_2D, ping_pong_targets[0].texture);
 					gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
 				}
 			}
@@ -1090,26 +1101,18 @@ fn main() {
 			//Clear the depth buffer before rendering 2D elements
 			gl::Clear(gl::DEPTH_BUFFER_BIT);
 
-			//Render buttons
+			//Render UI buttons
 			if let Some(vao) = ui_vao {
-				gl::UseProgram(ui_program);
-				glutil::bind_matrix4(ui_program, "clipping_from_screen", &clipping_from_screen);
-				gl::BindVertexArray(vao);
-				gl::DrawElements(gl::TRIANGLES, 6 * ui_buttons.len() as GLint, gl::UNSIGNED_SHORT, ptr::null());
+				draw_ui_element(vao, ui_shader, ui_buttons.count(), &clipping_from_screen);
 			}
-
 
 			//Render text
 			if let Some(vao) = glyph_vao {
-				gl::UseProgram(glyph_shader);
-				glutil::bind_matrix4(glyph_shader, "clipping_from_screen", &clipping_from_screen);
-				gl::BindVertexArray(vao);
-
 				initialize_texture_samplers(glyph_shader, &["glyph_texture"]);
 				gl::ActiveTexture(gl::TEXTURE0);
 				gl::BindTexture(gl::TEXTURE_2D, glyph_texture);
 
-				gl::DrawElements(gl::TRIANGLES, 6 * glyph_count as GLint, gl::UNSIGNED_SHORT, ptr::null());
+				draw_ui_element(vao, glyph_shader, glyph_count, &clipping_from_screen);
 			}
 		}
 
