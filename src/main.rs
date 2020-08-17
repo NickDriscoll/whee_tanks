@@ -10,9 +10,11 @@ use ozy_engine::{glutil, routines};
 use ozy_engine::structs::OptionVec;
 use crate::structs::*;
 use crate::input::{Command, InputType};
+use crate::ui::{ButtonState, Menu, MenuAnchor, UIButton};
 
 mod structs;
 mod input;
+mod ui;
 
 const DEFAULT_TEX_PARAMS: [(GLenum, GLenum); 4] = [
 	(gl::TEXTURE_WRAP_S, gl::REPEAT),
@@ -419,19 +421,19 @@ fn main() {
 		let mut map = HashMap::new();
 
 		map.insert((InputType::Key(Key::Escape), Action::Press), Command::TogglePauseMenu);
-		map.insert((InputType::Key(Key::Escape), Action::Press), Command::TogglePauseMenu);
 		map.insert((InputType::Key(Key::Q), Action::Press), Command::ToggleWireframe);
 		map.insert((InputType::Key(Key::W), Action::Press), Command::MoveForwards);
 		map.insert((InputType::Key(Key::S), Action::Press), Command::MoveBackwards);
 		map.insert((InputType::Key(Key::A), Action::Press), Command::RotateLeft);
 		map.insert((InputType::Key(Key::D), Action::Press), Command::RotateRight);
+		map.insert((InputType::Key(Key::GraveAccent), Action::Press), Command::ToggleDebugMenu);
+		map.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
 
+		//The keys here depend on the earlier bindings
 		map.insert((InputType::Key(Key::W), Action::Release), Command::StopMoving);
 		map.insert((InputType::Key(Key::S), Action::Release), Command::StopMoving);
 		map.insert((InputType::Key(Key::A), Action::Release), Command::StopRotating);
-		map.insert((InputType::Key(Key::D), Action::Release), Command::StopRotating);
-		
-		map.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
+		map.insert((InputType::Key(Key::D), Action::Release), Command::StopRotating);		
 
 		map
 	};
@@ -487,7 +489,7 @@ fn main() {
 									   0.0, 1.0, 0.0, 0.0,
 									   0.0, 0.0, 1.0, 0.0,
 									   0.0, 0.0, 0.0, 1.0) * glm::look_at(&glm::vec4_to_vec3(&(sun_direction * 4.0)), &glm::zero(), &glm::vec3(0.0, 1.0, 0.0));
-	let shadow_projection = glm::ortho(-ortho_size * 2.0, ortho_size * 2.0, -ortho_size * 2.0, ortho_size * 2.0, -ortho_size, ortho_size * 3.0);
+	let shadow_projection = glm::ortho(-ortho_size * 3.0, ortho_size * 3.0, -ortho_size * 3.0, ortho_size * 3.0, -ortho_size * 2.0, ortho_size * 3.0);
 
 	let font = match FontArc::try_from_slice(include_bytes!("../fonts/Constantia.ttf")) {
 		Ok(s) => { s }
@@ -526,6 +528,20 @@ fn main() {
 	let mut last_ui_button_count = 0;
 	let mut ui_vao = None;
 	let mut button_color_instanced_buffer = 0;
+
+	//Pause menu data
+	let mut pause_menu = Menu::new(
+		vec!["Resume", "Settings", "Main Menu", "Exit"],
+		vec![Some(Command::TogglePauseMenu), None, None, Some(Command::Quit)],
+		MenuAnchor::CenterAligned(window_size.0 as f32 / 2.0, 50.0)
+	);
+
+	//Debug menu data
+	let mut debug_menu = Menu::new(
+		vec!["Wireframe"],
+		vec![Some(Command::ToggleWireframe)],
+		MenuAnchor::LeftAligned(10.0, 10.0)
+	);
 
 	//Variable that determines what the update step looks like
 	let mut game_state = GameState::Playing;
@@ -583,7 +599,9 @@ fn main() {
 				   screen_space_mouse.y < button.bounds.max[1] {
 
 					if last_mouse_lbutton_pressed && !mouse_lbutton_pressed {
-						command_buffer.push(button.command);
+						if let Some(command) = button.command {
+							command_buffer.push(command);
+						}
 					}
 
 					//Handle updating button graphics
@@ -643,10 +661,10 @@ fn main() {
 					}
 				}
 				Command::Fire => { tank.firing = true; }
-				Command::ToggleFreecam => {
-
+				Command::ToggleDebugMenu => {
+					//Show the debug menu
+					debug_menu.toggle(&mut ui_buttons, &mut sections, &mut glyph_brush);
 				}
-				Command::NOP => {}
 			}
 		}
 
@@ -755,52 +773,16 @@ fn main() {
 			}
 			GameState::Paused => {}
 			GameState::Pausing => {
-				//Submit the pause menu text
-				sections.clear();
-				let labels = ["Resume", "Settings", "Main Menu", "Exit"];
-				let commands = [Command::TogglePauseMenu, Command::NOP, Command::NOP, Command::Quit];
-				const BORDER_WIDTH: f32 = 15.0;
-				let font_size = 36.0;
-				for i in 0..labels.len() {
-					let y_buffer = 10.0;
-					let mut section = {
-						let section = Section::new();
-						let mut text = Text::new(labels[i]).with_color([1.0, 1.0, 1.0, 1.0]);
-						text.scale = PxScale::from(font_size);
-						section.add_text(text)
-					};
-					let bounding_box = match glyph_brush.glyph_bounds(&section) {
-						Some(rect) => { rect }
-						None => { continue; }
-					};
-					section.screen_position = (
-						window_size.0 as f32 / 2.0 - (bounding_box.width() + 2.0 * BORDER_WIDTH) / 2.0,
-						window_size.1 as f32 / 2.5 + ((bounding_box.height() + 2.0 * BORDER_WIDTH) + y_buffer) * i as f32
-					);
-
-					//Create the associated UI button
-					let button_bounds = glyph_brush::Rectangle {
-						min: [section.screen_position.0 - BORDER_WIDTH, section.screen_position.1 - BORDER_WIDTH],
-						max: [section.screen_position.0 + (bounding_box.max.x - bounding_box.min.x) + BORDER_WIDTH, section.screen_position.1 + (bounding_box.max.y - bounding_box.min.y) + BORDER_WIDTH]
-					};
-					let button = UIButton::new(button_bounds, commands[i]);
-
-					ui_buttons.insert(button);
-
-					//Finally insert the section into the array					
-					sections.insert(section);
-				}
+				//Enable the pause menu
+				pause_menu.show(&mut ui_buttons, &mut sections, &mut glyph_brush);
 
 				key_bindings.remove(&(InputType::Mouse(MouseButton::Button1), Action::Press));
 				game_state = GameState::Paused;
 				image_effect = ImageEffect::Blur;
 			}
 			GameState::Resuming => {
-				//Clear all text
-				sections.clear();
-
-				//Clear ui buttons
-				ui_buttons.clear();
+				//Remove the pause menu from the ui button list
+				pause_menu.hide(&mut ui_buttons, &mut sections);
 
 				//Re-enable normal controls
 				key_bindings.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
@@ -838,7 +820,6 @@ fn main() {
 
 		//Repeatedly resize the glyph texture until the error stops
 		while let Err(BrushError::TextureTooSmall { suggested }) = glyph_result {
-			println!("Resizing glyph_texture to {:?}", suggested);
 			let (width, height) = suggested;
 			unsafe {
 				gl::BindTexture(gl::TEXTURE_2D, glyph_texture);

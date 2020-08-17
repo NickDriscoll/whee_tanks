@@ -209,29 +209,6 @@ impl RenderTarget {
     }
 }
 
-pub struct UIButton {
-    pub bounds: glyph_brush::Rectangle<f32>,
-    pub state: ButtonState,
-    pub command: Command
-}
-
-impl UIButton {
-    pub fn new(bounds: glyph_brush::Rectangle<f32>, command: Command) -> Self {
-        UIButton {
-            bounds,
-            state: ButtonState::None,
-            command
-        }
-    }
-}
-
-#[derive(PartialEq, Eq)]
-pub enum ButtonState {
-    None,
-    Hovering,
-    Pressing
-}
-
 pub enum TankMoving {
     Forwards,
     Backwards,
