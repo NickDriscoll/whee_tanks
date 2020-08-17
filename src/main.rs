@@ -533,7 +533,7 @@ fn main() {
 	let mut pause_menu = Menu::new(
 		vec!["Resume", "Settings", "Main Menu", "Exit"],
 		vec![Some(Command::TogglePauseMenu), None, None, Some(Command::Quit)],
-		MenuAnchor::CenterAligned(window_size.0 as f32 / 2.0, 50.0)
+		MenuAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 5.0)
 	);
 
 	//Debug menu data
@@ -581,8 +581,8 @@ fn main() {
 					}
 				}
 				WindowEvent::CursorPos(x, y) => {
-					//We have to flip the y coordinate because glfw thinks (0, 0) is in the top left
 					screen_space_mouse = glm::vec2(x as f32, y as f32);
+					//We have to flip the y coordinate because glfw thinks (0, 0) is in the top left
 					let clipping_space_mouse = glm::vec4(x as f32 / (window_size.0 as f32 / 2.0) - 1.0, -(y as f32 / (window_size.1 as f32 / 2.0) - 1.0), 0.0, 1.0);
 					world_space_mouse = world_from_clipping * clipping_space_mouse;
 				}
@@ -662,7 +662,7 @@ fn main() {
 				}
 				Command::Fire => { tank.firing = true; }
 				Command::ToggleDebugMenu => {
-					//Show the debug menu
+					//Toggle the debug menu
 					debug_menu.toggle(&mut ui_buttons, &mut sections, &mut glyph_brush);
 				}
 			}
@@ -880,22 +880,24 @@ fn main() {
 		if ui_buttons.count() > 0 && ui_buttons.count() != last_ui_button_count {
 			unsafe { 
 				let floats_per_button = 4 * 2;
-				let mut vertices = vec![0.0; ui_buttons.len() * floats_per_button];
-				let mut indices = vec![0u16; ui_buttons.len() * 6];
+				let mut vertices = vec![0.0; ui_buttons.count() * floats_per_button];
+				let mut indices = vec![0u16; ui_buttons.count() * 6];
 
+				let mut quads_added = 0;
 				for i in 0..ui_buttons.len() {
 					if let Some(button) = &ui_buttons[i] {
-						vertices[i * floats_per_button] = button.bounds.min[0];
-						vertices[i * floats_per_button + 1] = button.bounds.min[1];
-						vertices[i * floats_per_button + 2] = button.bounds.min[0];
-						vertices[i * floats_per_button + 3] = button.bounds.max[1];
-						vertices[i * floats_per_button + 4] = button.bounds.max[0];
-						vertices[i * floats_per_button + 5] = button.bounds.min[1];
-						vertices[i * floats_per_button + 6] = button.bounds.max[0];
-						vertices[i * floats_per_button + 7] = button.bounds.max[1];
+						vertices[quads_added * floats_per_button] = button.bounds.min[0];
+						vertices[quads_added * floats_per_button + 1] = button.bounds.min[1];
+						vertices[quads_added * floats_per_button + 2] = button.bounds.min[0];
+						vertices[quads_added * floats_per_button + 3] = button.bounds.max[1];
+						vertices[quads_added * floats_per_button + 4] = button.bounds.max[0];
+						vertices[quads_added * floats_per_button + 5] = button.bounds.min[1];
+						vertices[quads_added * floats_per_button + 6] = button.bounds.max[0];
+						vertices[quads_added * floats_per_button + 7] = button.bounds.max[1];
 
 						//Place this quad in the index buffer
-						insert_index_buffer_quad(&mut indices, i);
+						insert_index_buffer_quad(&mut indices, quads_added);
+						quads_added += 1;
 					}
 				}
 
@@ -914,7 +916,7 @@ fn main() {
 
 				//Create GPU buffer for ui button colors
 				button_color_instanced_buffer = {
-					let element_count = ui_buttons.len() * COLORS_PER_BUTTON;
+					let element_count = ui_buttons.count() * COLORS_PER_BUTTON;
 
 					let mut data = vec![0.0f32; element_count * FLOATS_PER_COLOR];
 					for i in 0..(data.len() / FLOATS_PER_COLOR) {

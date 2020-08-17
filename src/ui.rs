@@ -113,6 +113,7 @@ impl Menu {
                 ui_buttons.delete(*id);
 			}
         }
+        println!("{:?}", ui_buttons);
         self.active = false;
     }
 
