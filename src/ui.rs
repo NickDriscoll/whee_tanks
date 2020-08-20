@@ -4,6 +4,10 @@ use glyph_brush::{GlyphBrush, GlyphCruncher, ab_glyph::PxScale, Section, Text};
 
 type GlyphBrushVertexType = [f32; 16];
 
+pub struct UIContext {
+
+}
+
 #[derive(Debug)]
 pub struct UIButton {
     pub bounds: glyph_brush::Rectangle<f32>,
@@ -27,16 +31,16 @@ impl UIButton {
     }
 }
 
-pub struct Menu {
-    labels: Vec<&'static str>,
+pub struct Menu<'a> {
+    labels: Vec<&'a str>,
     commands: Vec<Option<Command>>,
     anchor: MenuAnchor,
     active: bool,
-    pub ids: Vec<usize>
+    ids: Vec<usize>
 }
 
-impl Menu {
-    pub fn new(labels: Vec<&'static str>, commands: Vec<Option<Command>>, anchor: MenuAnchor) -> Self {
+impl<'a> Menu<'a> {
+    pub fn new(labels: Vec<&'a str>, commands: Vec<Option<Command>>, anchor: MenuAnchor) -> Self {
         if labels.len() != commands.len() {
             panic!("Tried to create menu with non-matching labels and commands sizes");
         }
@@ -52,7 +56,7 @@ impl Menu {
     }
 
     //Adds this menu's data to the arrays of buttons and sections
-    pub fn show(&mut self, ui_buttons: &mut OptionVec<UIButton>, sections: &mut OptionVec<Section>, glyph_brush: &mut GlyphBrush<GlyphBrushVertexType>) {
+    pub fn show<'b>(&mut self, ui_buttons: &mut OptionVec<UIButton>, sections: &'b mut OptionVec<Section<'a>>, glyph_brush: &mut GlyphBrush<GlyphBrushVertexType>) {
         //Submit the pause menu text
 		const BORDER_WIDTH: f32 = 15.0;
 		const BUFFER_DISTANCE: f32 = 10.0;
@@ -82,7 +86,7 @@ impl Menu {
                     }
                 }
                 MenuAnchor::CenterAligned(x, y) => {
-                    let x_pos = x - (bounding_box.width() / 2.0) - BORDER_WIDTH;
+                    let x_pos = x - width / 2.0;
                     let y_pos = y + i as f32 * (height + BUFFER_DISTANCE);
                     glyph_brush::Rectangle {
                         min: [x_pos, y_pos],
@@ -113,11 +117,10 @@ impl Menu {
                 ui_buttons.delete(*id);
 			}
         }
-        println!("{:?}", ui_buttons);
         self.active = false;
     }
 
-    pub fn toggle(&mut self, ui_buttons: &mut OptionVec<UIButton>, sections: &mut OptionVec<Section>, glyph_brush: &mut GlyphBrush<GlyphBrushVertexType>) {
+    pub fn toggle<'b>(&mut self, ui_buttons: &mut OptionVec<UIButton>, sections: &'b mut OptionVec<Section<'a>>, glyph_brush: &mut GlyphBrush<GlyphBrushVertexType>) {
         if self.active {
             self.hide(ui_buttons, sections);
         } else {
