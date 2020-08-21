@@ -5,7 +5,7 @@ use std::os::raw::c_void;
 use std::time::Instant;
 use glfw::{Action, Context, Key, MouseButton, WindowEvent, WindowMode};
 use gl::types::*;
-use glyph_brush::{ab_glyph::{FontArc, PxScale}, BrushAction, BrushError, GlyphBrushBuilder, GlyphCruncher, GlyphVertex, Section, Text};
+use glyph_brush::{ab_glyph::{FontArc}, BrushAction, BrushError, GlyphBrushBuilder, GlyphVertex};
 use ozy_engine::{glutil, routines};
 use ozy_engine::structs::OptionVec;
 use crate::structs::*;
@@ -58,7 +58,7 @@ fn glyph_vertex_transform(vertex: GlyphVertex) -> [f32; 16] {
 	]	
 }
 
-extern "system" fn gl_debug_callback(source: GLenum, gltype: GLenum, id: GLuint, severity: GLenum, length: GLsizei, message: *const GLchar, user_param: *mut c_void) {
+extern "system" fn gl_debug_callback(source: GLenum, gltype: GLenum, id: GLuint, severity: GLenum, length: GLsizei, message: *const GLchar, _: *mut c_void) {
 	println!("--------------------OpenGL debug message--------------------");
 	println!("ID: {}", id);
 	
@@ -135,7 +135,7 @@ unsafe fn update_ui_button_color_buffer(buffer: GLuint, index: usize, color: [f3
 	gl::BufferSubData(gl::ARRAY_BUFFER,
 					(COLORS_PER_BUTTON * FLOATS_PER_COLOR * index * mem::size_of::<GLfloat>()) as GLintptr,
 					(FLOATS_PER_COLOR * COLORS_PER_BUTTON * mem::size_of::<GLfloat>()) as GLsizeiptr,
-					&data[0] as *const f32 as *const c_void);
+					&data[0] as *const GLfloat as *const c_void);
 }
 
 pub unsafe fn draw_ui_element(vao: GLuint, shader: GLuint, count: usize, clipping_from_screen: &glm::TMat4<f32>) {
@@ -167,16 +167,15 @@ fn main() {
 	//Make the window fullscreen
 	/*
 	glfw.with_primary_monitor_mut(|_, opt_monitor| {
-			if let Some(monitor) = opt_monitor {
-				let window_mode = WindowMode::FullScreen(monitor);
-				let pos = monitor.get_pos();
-				if let Some(mode) = monitor.get_video_mode() {
-					window_size = (mode.width, mode.height);
-					aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
-					window.set_size(window_size.0 as i32, window_size.1 as i32);
-					window.set_monitor(window_mode, pos.0, pos.1, window_size.0, window_size.1, Some(144));
-				}
+		if let Some(monitor) = opt_monitor {
+			let pos = monitor.get_pos();
+			if let Some(mode) = monitor.get_video_mode() {
+				window_size = (mode.width, mode.height);
+				aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
+				window.set_size(window_size.0 as i32, window_size.1 as i32);
+				window.set_monitor(WindowMode::FullScreen(monitor), pos.0, pos.1, window_size.0, window_size.1, Some(144));
 			}
+		}
 	});
 	*/
 
@@ -188,7 +187,7 @@ fn main() {
 	window.set_cursor_pos_polling(true);
 
 	//Initialize all OpenGL function pointers
-	gl::load_with(|symbol| window.get_proc_address(symbol) as *const _);	
+	gl::load_with(|symbol| window.get_proc_address(symbol) as *const _);
 
 	//OpenGL static configuration
 	unsafe {
@@ -206,13 +205,10 @@ fn main() {
 	}
 
 	//Framebuffers used for image effects
-	let ping_pong_targets = unsafe {
+	let ping_pong_fbos = unsafe {
 		let size = (window_size.0 as GLint, window_size.1 as GLint);
-		let pre = RenderTarget::new(size);
-		let post = RenderTarget::new(size);
-		[pre, post]
+		[RenderTarget::new(size), RenderTarget::new(size)]
 	};
-
 
 	//Screen filling triangle with uvs chosen such that the sampled image exactly covers the screen
 	let postprocessing_vao = unsafe {
@@ -276,16 +272,18 @@ fn main() {
 		arena_pieces.len() - 1
 	};
 
+	//Array of all tanks
+	let mut tanks = OptionVec::new();
+
 	//Load the tank
 	let mut turret_origin = glm::zero();
-	const TANK_SPEED: f32 = 2.5;
-	let mut tank = match routines::load_ozymesh("models/better_tank.ozy") {
+	let tank_skeleton = match routines::load_ozymesh("models/better_tank.ozy") {
 		Some(meshdata) => {
 			let mut node_list = Vec::with_capacity(meshdata.names.len());
 			let mut albedo_maps = Vec::with_capacity(meshdata.names.len());
 			let mut normal_maps = Vec::with_capacity(meshdata.names.len());
 			let mut roughness_maps = Vec::with_capacity(meshdata.names.len());
-			let mut node_data = Vec::new();
+			let mut bones = Vec::new();
 
 			//Load node info
 			for i in 0..meshdata.node_ids.len() {
@@ -296,7 +294,7 @@ fn main() {
 				};
 
 				if !node_list.contains(&(meshdata.node_ids[i] as usize - 1)) {
-					node_data.push(SkeletonNode {
+					bones.push(Bone {
 						transform: glm::identity(),
 						parent
 					});
@@ -326,35 +324,34 @@ fn main() {
 
 			//Create the vertex array object
 			let vao = unsafe { glutil::create_vertex_array_object(&meshdata.vertex_array.vertices, &meshdata.vertex_array.indices, &meshdata.vertex_array.attribute_offsets) };
-			let skeleton = Skeleton {
+			Skeleton {
 				vao,
-				node_data,
 				node_list,
 				geo_boundaries: meshdata.geo_boundaries,
 				albedo_maps,
 				normal_maps,
-				roughness_maps
-			};
-
-			//Initialize the tank's gameplay data
-			let tank_forward = glm::vec3(0.0, 0.0, 1.0);
-			let turret_forward = glm::vec3_to_vec4(&tank_forward);
-			let tank_position = glm::zero();
-			Tank {
-				position: tank_position,
-				speed: TANK_SPEED,
-				firing: false,
-				forward: tank_forward,
-				move_state: TankMoving::Not,
-				tank_rotating: Rotating::Not,
-				turret_forward,
-				skeleton
+				roughness_maps,
+				bones
 			}
 		}
 		None => {
 			panic!("Unable to load model.");
 		}
 	};
+	
+	let player_tank_id = {
+		//Initialize the tank's gameplay data
+		let tank_forward = glm::vec3(-1.0, 0.0, 0.0);
+		let tank_position = glm::vec3(-4.5, 0.0, 0.0);
+		let tank = Tank::new(tank_position, tank_forward, &tank_skeleton, Brain::PlayerInput);
+		tanks.insert(tank)
+	};
+
+	//Add an enemy tank
+	let tank_forward = glm::vec3(1.0, 0.0, 0.0);
+	let tank_position = glm::vec3(4.5, 0.0, 0.0);
+	let tank = Tank::new(tank_position, tank_forward, &tank_skeleton, Brain::DumbAI(AIState::new()));
+	tanks.insert(tank);
 
 	//Load shell graphics
 	let shell_mesh = SimpleMesh::from_ozy("models/better_shell.ozy", &mut texture_keeper);
@@ -521,6 +518,8 @@ fn main() {
 		0.0, 0.0, 1.0, 0.0,
 		0.0, 0.0, 0.0, 1.0
 	);
+
+	//Array of text sections
 	let mut sections = OptionVec::new();
 
 	//Array of UI buttons
@@ -533,13 +532,13 @@ fn main() {
 	let mut pause_menu = Menu::new(
 		vec!["Resume", "Settings", "Main Menu", "Exit"],
 		vec![Some(Command::TogglePauseMenu), None, None, Some(Command::Quit)],
-		MenuAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 5.0)
+		MenuAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
 	);
 
 	//Debug menu data
 	let mut debug_menu = Menu::new(
-		vec!["Wireframe"],
-		vec![Some(Command::ToggleWireframe)],
+		vec!["Wireframe", "Toggle Edit Mode"],
+		vec![Some(Command::ToggleWireframe), None],
 		MenuAnchor::LeftAligned(10.0, 10.0)
 	);
 
@@ -558,7 +557,6 @@ fn main() {
 			//There's an underlying assumption here that frames will always take less than one second to complete
 			(dur.subsec_millis() as f32 / 1000.0) + (dur.subsec_micros() as f32 / 1_000_000.0)
 		};
-		elapsed_time += delta_time;
 
 		//Handle window events
         for (_, event) in glfw::flush_messages(&events) {
@@ -592,7 +590,7 @@ fn main() {
 		
 		//Handle input from the UI buttons
 		for i in 0..ui_buttons.len() {
-			if let Some(button) = &mut ui_buttons[i] {
+			if let Some(button) = ui_buttons.get_mut_element(i) {
 				if screen_space_mouse.x > button.bounds.min[0] &&
 				   screen_space_mouse.x < button.bounds.max[0] &&
 				   screen_space_mouse.y > button.bounds.min[1] &&
@@ -613,7 +611,7 @@ fn main() {
 						};
 						unsafe { update_ui_button_color_buffer(button_color_instanced_buffer, i, color); }
 
-						button.state = ButtonState::Hovering;
+						button.state = ButtonState::Highlighted;
 					}
 				} else {
 					if button.state != ButtonState::None {
@@ -636,22 +634,34 @@ fn main() {
 					is_wireframe = !is_wireframe;
 				}
 				Command::MoveForwards => {
-					tank.move_state = TankMoving::Forwards;
+					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
+						tank.move_state = TankMoving::Forwards;
+					}
 				}
 				Command::MoveBackwards => {
-					tank.move_state = TankMoving::Backwards;
+					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
+						tank.move_state = TankMoving::Backwards;
+					}
 				}
 				Command::RotateLeft => {
-					tank.tank_rotating = Rotating::Left;
+					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
+						tank.rotating = Rotating::Left;
+					}
 				}
 				Command::RotateRight => {
-					tank.tank_rotating = Rotating::Right;
+					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
+						tank.rotating = Rotating::Right;
+					}
 				}
 				Command::StopMoving => {
-					tank.move_state = TankMoving::Not;
+					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
+						tank.move_state = TankMoving::Not;
+					}
 				}
 				Command::StopRotating => {
-					tank.tank_rotating = Rotating::Not;
+					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
+						tank.rotating = Rotating::Not;
+					}
 				}
 				Command::TogglePauseMenu => {
 					match game_state {
@@ -660,7 +670,11 @@ fn main() {
 						_ => {}
 					}
 				}
-				Command::Fire => { tank.firing = true; }
+				Command::Fire => {
+					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
+						tank.firing = true;
+					}
+				}
 				Command::ToggleDebugMenu => {
 					//Toggle the debug menu
 					debug_menu.toggle(&mut ui_buttons, &mut sections, &mut glyph_brush);
@@ -671,88 +685,116 @@ fn main() {
 		//-----------Simulating-----------
 		match game_state {
 			GameState::Playing => {
-				//Update the tank's position
-				match tank.move_state {
-					TankMoving::Forwards => {
-						tank.position += tank.forward * -tank.speed * delta_time;
-					}
-					TankMoving::Backwards => {
-						tank.position += tank.forward * tank.speed * delta_time;
-					}
-					TankMoving::Not => {}
+				elapsed_time += delta_time;
+
+				let mut player_origin = glm::vec4(0.0, 0.0, 0.0, 1.0);
+				if let Some(tank) = &tanks[player_tank_id] {
+					player_origin = tank.bones[0].transform * turret_origin;
 				}
 
-				//Update the tank's forward vector
-				tank.forward = match tank.tank_rotating {
-					Rotating::Left => {
-						glm::vec4_to_vec3(&(glm::rotation(-glm::half_pi::<f32>() * delta_time, &glm::vec3(0.0, 1.0, 0.0)) * glm::vec3_to_vec4(&tank.forward)))
+				//Update the tanks				
+				for j in 0..tanks.len() {					
+					if let Some(tank) = tanks.get_mut_element(j) {
+						//Update the tank's position
+						match tank.move_state {
+							TankMoving::Forwards => {
+								tank.position += tank.forward * -tank.speed * delta_time;
+							}
+							TankMoving::Backwards => {
+								tank.position += tank.forward * tank.speed * delta_time;
+							}
+							TankMoving::Not => {}
+						}
+
+						//Update the tank's forward vector
+						tank.forward = match tank.rotating {
+							Rotating::Left => {
+								glm::vec4_to_vec3(&(glm::rotation(-glm::half_pi::<f32>() * delta_time as f32, &glm::vec3(0.0, 1.0, 0.0)) * glm::vec3_to_vec4(&tank.forward)))
+							}
+							Rotating::Right => {
+								glm::vec4_to_vec3(&(glm::rotation(glm::half_pi::<f32>() * delta_time as f32, &glm::vec3(0.0, 1.0, 0.0)) * glm::vec3_to_vec4(&tank.forward)))
+							}
+							Rotating::Not => { tank.forward }
+						};
+
+						tank.rotation = {
+							let new_x = -glm::cross(&tank.forward, &glm::vec3(0.0, 1.0, 0.0));
+							glm::mat4(new_x.x, 0.0, tank.forward.x, 0.0,
+									new_x.y, 1.0, tank.forward.y, 0.0,
+									new_x.z, 0.0, tank.forward.z, 0.0,
+									0.0, 0.0, 0.0, 1.0
+									)
+						};
+
+						tank.bones[0].transform = glm::translation(&tank.position) * tank.rotation;
+						
+						tank.turret_origin = tank.bones[0].transform * turret_origin;
+						let aim_target;
+						match &mut tank.brain {
+							Brain::PlayerInput => {
+								//Simple ray-plane intersection.
+								let plane_normal = glm::vec3(0.0, 1.0, 0.0);
+								let t = glm::dot(&glm::vec4_to_vec3(&(tank.turret_origin - world_space_mouse)), &plane_normal) / glm::dot(&glm::vec4_to_vec3(&world_space_look_direction), &plane_normal);
+								let intersection = world_space_mouse + t * world_space_look_direction;
+
+								//Point the turret at the mouse cursor
+								aim_target = intersection;
+							}
+							Brain::DumbAI(ref mut ai_state) => {
+								let shot_cooldown = 2.0;
+
+								//Point at player
+								aim_target = player_origin;
+
+								//Fire if ready
+								if elapsed_time > ai_state.last_shot_time + shot_cooldown {
+									tank.firing = true;
+									ai_state.last_shot_time = elapsed_time;
+								}
+							}
+						}
+						tank.aim_turret(&aim_target);
+
+						//Fire a shell if the tank's firing flag is set
+						if tank.firing {
+							let transform = tank.bones[1].transform;
+							let position = transform * glm::vec4(0.0, 0.0, 0.0, 1.0);
+							let velocity = tank.turret_forward * 2.0;
+
+							shells.insert(Shell {
+								position,
+								velocity,
+								transform,
+								spawn_time: elapsed_time as f32
+							});
+							tank.firing = false;
+						}
 					}
-					Rotating::Right => {
-						glm::vec4_to_vec3(&(glm::rotation(glm::half_pi::<f32>() * delta_time, &glm::vec3(0.0, 1.0, 0.0)) * glm::vec3_to_vec4(&tank.forward)))
-					}
-					Rotating::Not => { tank.forward }
-				};
-
-				let tank_rotation = {
-					let new_x = -glm::cross(&tank.forward, &glm::vec3(0.0, 1.0, 0.0));
-					glm::mat4(new_x.x, 0.0, tank.forward.x, 0.0,
-							new_x.y, 1.0, tank.forward.y, 0.0,
-							new_x.z, 0.0, tank.forward.z, 0.0,
-							0.0, 0.0, 0.0, 1.0
-							)
-				};
-
-				tank.skeleton.node_data[0].transform = glm::translation(&tank.position) * tank_rotation;
-
-				//Calculate turret rotation
-				//Simple ray-plane intersection.
-				tank.skeleton.node_data[1].transform = {
-					let plane_normal = glm::vec3(0.0, 1.0, 0.0);
-					let origin = tank.skeleton.node_data[0].transform * turret_origin;
-					let t = glm::dot(&glm::vec4_to_vec3(&(origin - world_space_mouse)), &plane_normal) / glm::dot(&glm::vec4_to_vec3(&world_space_look_direction), &plane_normal);
-					let intersection = world_space_mouse + t * world_space_look_direction;
-					tank.turret_forward = glm::normalize(&(intersection - origin));
-					let new_x = -glm::cross(&glm::vec4_to_vec3(&-tank.turret_forward), &glm::vec3(0.0, 1.0, 0.0));
-
-					tank.skeleton.node_data[0].transform *
-					glm::mat4(new_x.x, 0.0, -tank.turret_forward.x, 0.0,
-							new_x.y, 1.0, -tank.turret_forward.y, 0.0,
-							new_x.z, 0.0, -tank.turret_forward.z, 0.0,
-							0.0, 0.0, 0.0, 1.0
-							) * glm::affine_inverse(tank_rotation)
-				};
-
-				//Fire a shell if the mouse was clicked this frame
-				if tank.firing {
-					let transform = tank.skeleton.node_data[1].transform;
-					let position = transform * glm::vec4(0.0, 0.0, 0.0, 1.0);
-					let velocity = tank.turret_forward * 2.0;
-
-					shells.insert(Shell {
-						position,
-						velocity,
-						transform,
-						vao: shell_mesh.vao,
-						spawn_time: elapsed_time
-					});
 				}
-				
+
 				//Update shells
-				let mut shell_transforms = vec![0.0; shells.count() * 16];
+				let floats_per_transform = 16;
+				let mut shell_transforms = vec![0.0; shells.count() * floats_per_transform];
 				let mut current_shell = 0;
 				for i in 0..shells.len() {
-					if let Some(shell) = &mut shells[i] {
+					if let Some(shell) = shells.get_mut_element(i) {
+						let shell_lifetime = 5.0;
+						if elapsed_time > shell.spawn_time + shell_lifetime {
+							shells.delete(i);
+							continue;
+						}
+
 						//Update position
-						shell.position += shell.velocity * delta_time;
+						shell.position += shell.velocity * delta_time as f32;
 
 						//Update the translation part of the transform
 						shell.transform[12] = shell.position.x;
 						shell.transform[13] = shell.position.y;
 						shell.transform[14] = shell.position.z;
 
-						//Fill the position buffer used for instanced rendering
-						for j in 0..16 {
-							shell_transforms[current_shell * 16 + j] = shell.transform[j];
+						//Fill the transform buffer used for instanced rendering
+						for j in 0..floats_per_transform {
+							shell_transforms[current_shell * floats_per_transform + j] = shell.transform[j];
 						}
 						current_shell += 1;
 					}
@@ -769,7 +811,6 @@ fn main() {
 										);
 					}
 				}
-				tank.firing = false;
 			}
 			GameState::Paused => {}
 			GameState::Pausing => {
@@ -967,12 +1008,16 @@ fn main() {
 			}
 
 			//Render tank
-			gl::BindVertexArray(tank.skeleton.vao);
-			for i in 0..tank.skeleton.node_list.len() {
-				let node_index = tank.skeleton.node_list[i];
-				glutil::bind_matrix4(shadow_shader, "mvp", &(shadow_projection * shadow_from_world * tank.skeleton.node_data[node_index].transform));
+			for i in 0..tanks.len() {
+				if let Some(tank) = &tanks[i] {
+					gl::BindVertexArray(tank.skeleton.vao);
+					for j in 0..tank.skeleton.node_list.len() {
+						let node_index = tank.skeleton.node_list[j];
+						glutil::bind_matrix4(shadow_shader, "mvp", &(shadow_projection * shadow_from_world * tank.bones[node_index].transform));
 
-				gl::DrawElements(gl::TRIANGLES, (tank.skeleton.geo_boundaries[i + 1] - tank.skeleton.geo_boundaries[i]) as i32, gl::UNSIGNED_SHORT, (mem::size_of::<GLushort>() * tank.skeleton.geo_boundaries[i] as usize) as *const c_void);
+						gl::DrawElements(gl::TRIANGLES, (tank.skeleton.geo_boundaries[j + 1] - tank.skeleton.geo_boundaries[j]) as i32, gl::UNSIGNED_SHORT, (mem::size_of::<GLushort>() * tank.skeleton.geo_boundaries[j] as usize) as *const c_void);
+					}
+				}
 			}
 
 			//Render shells
@@ -982,7 +1027,7 @@ fn main() {
 			gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
 
 			//Main scene rendering
-			ping_pong_targets[0].bind();
+			ping_pong_fbos[0].bind();
 			
 			//Set polygon fill mode
 			if is_wireframe { gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE); }
@@ -1009,15 +1054,19 @@ fn main() {
 				gl::DrawElements(gl::TRIANGLES, piece.index_count, gl::UNSIGNED_SHORT, ptr::null());
 			}
 
-			//Render the tank
-			gl::BindVertexArray(tank.skeleton.vao);
-			for i in 0..tank.skeleton.node_list.len() {
-				let node_index = tank.skeleton.node_list[i];
-				glutil::bind_matrix4(mapped_shader, "mvp", &(clipping_from_world * tank.skeleton.node_data[node_index].transform));
-				glutil::bind_matrix4(mapped_shader, "model_matrix", &tank.skeleton.node_data[node_index].transform);
-				bind_texture_maps(&[tank.skeleton.albedo_maps[i], tank.skeleton.normal_maps[i], tank.skeleton.roughness_maps[i]]);
-
-				gl::DrawElements(gl::TRIANGLES, (tank.skeleton.geo_boundaries[i + 1] - tank.skeleton.geo_boundaries[i]) as i32, gl::UNSIGNED_SHORT, (mem::size_of::<GLushort>() * tank.skeleton.geo_boundaries[i] as usize) as *const c_void);
+			//Render the tanks
+			for i in 0..tanks.len() {
+				if let Some(tank) = &tanks[i] {
+					gl::BindVertexArray(tank.skeleton.vao);
+					for j in 0..tank.skeleton.node_list.len() {
+						let node_index = tank.skeleton.node_list[j];
+						glutil::bind_matrix4(mapped_shader, "mvp", &(clipping_from_world * tank.bones[node_index].transform));
+						glutil::bind_matrix4(mapped_shader, "model_matrix", &tank.bones[node_index].transform);
+						bind_texture_maps(&[tank.skeleton.albedo_maps[j], tank.skeleton.normal_maps[j], tank.skeleton.roughness_maps[j]]);
+		
+						gl::DrawElements(gl::TRIANGLES, (tank.skeleton.geo_boundaries[j + 1] - tank.skeleton.geo_boundaries[j]) as i32, gl::UNSIGNED_SHORT, (mem::size_of::<GLushort>() * tank.skeleton.geo_boundaries[j] as usize) as *const c_void);
+					}
+				}
 			}
 
 			//Render tank shells
@@ -1057,12 +1106,11 @@ fn main() {
 	
 					gl::UseProgram(gaussian_shader);
 					for _ in 0..passes {
-						let flags = [1, 0];
 						//Do a horizontal pass followed by a vertical one. This reduces complexity from N^2 to 2N
-						for i in 0..ping_pong_targets.len() {
-							ping_pong_targets[i ^ 1].bind();
-							gl::BindTexture(gl::TEXTURE_2D, ping_pong_targets[i].texture);
-							glutil::bind_int(gaussian_shader, "horizontal", flags[i]);
+						for i in 0..ping_pong_fbos.len() {
+							ping_pong_fbos[i ^ 1].bind();
+							gl::BindTexture(gl::TEXTURE_2D, ping_pong_fbos[i].texture);
+							glutil::bind_int(gaussian_shader, "horizontal", i as GLint ^ 1);
 							gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
 						}
 					}
@@ -1070,13 +1118,13 @@ fn main() {
 					//Render result to the default framebuffer
 					default_framebuffer.bind();
 					gl::UseProgram(passthrough_shader);
-					gl::BindTexture(gl::TEXTURE_2D, ping_pong_targets[0].texture);
+					gl::BindTexture(gl::TEXTURE_2D, ping_pong_fbos[0].texture);
 					gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
 				}
 				ImageEffect::None => {
 					default_framebuffer.bind();
 					gl::UseProgram(passthrough_shader);
-					gl::BindTexture(gl::TEXTURE_2D, ping_pong_targets[0].texture);
+					gl::BindTexture(gl::TEXTURE_2D, ping_pong_fbos[0].texture);
 					gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
 				}
 			}

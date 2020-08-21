@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::ptr;
 use ozy_engine::{glutil, routines};
 use crate::DEFAULT_TEX_PARAMS;
-use crate::input::*;
 
 pub struct StaticGeometry {
     pub vao: GLuint,
@@ -75,8 +74,10 @@ pub struct Tank<'a> {
     pub firing: bool,
     pub forward: glm::TVec3<f32>,
     pub move_state: TankMoving,
-    pub tank_rotating: Rotating,
+    pub rotating: Rotating,
+    pub rotation: glm::TMat4<f32>,
     pub turret_forward: glm::TVec4<f32>,
+    pub turret_origin: glm::TVec4<f32>,
     pub skeleton: &'a Skeleton,
     pub brain: Brain,
     pub bones: Vec<Bone>
@@ -92,12 +93,28 @@ impl<'a> Tank<'a> {
             firing: false,
             forward,
             move_state: TankMoving::Not,
-            tank_rotating: Rotating::Not,
+            rotating: Rotating::Not,
+            rotation: glm::identity(),
             turret_forward: glm::vec4(1.0, 0.0, 0.0, 0.0),
+            turret_origin: glm::vec4(0.0, 1.0, 0.0, 0.0),
             skeleton,
             brain,
             bones: skeleton.get_bones()
         }
+    }
+
+    pub fn aim_turret(&mut self, target: &glm::TVec4<f32>) {
+        //Point turret at target
+        self.turret_forward = glm::normalize(&(target - self.turret_origin));
+        self.bones[1].transform = {
+            let new_x = -glm::cross(&glm::vec4_to_vec3(&-self.turret_forward), &glm::vec3(0.0, 1.0, 0.0));
+            self.bones[0].transform *
+            glm::mat4(new_x.x, 0.0, -self.turret_forward.x, 0.0,
+                    new_x.y, 1.0, -self.turret_forward.y, 0.0,
+                    new_x.z, 0.0, -self.turret_forward.z, 0.0,
+                    0.0, 0.0, 0.0, 1.0
+                    ) * glm::affine_inverse(self.rotation)
+        };
     }
 }
 

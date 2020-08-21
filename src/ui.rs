@@ -4,10 +4,6 @@ use glyph_brush::{GlyphBrush, GlyphCruncher, ab_glyph::PxScale, Section, Text};
 
 type GlyphBrushVertexType = [f32; 16];
 
-pub struct UIContext {
-
-}
-
 #[derive(Debug)]
 pub struct UIButton {
     pub bounds: glyph_brush::Rectangle<f32>,
@@ -137,6 +133,5 @@ pub enum MenuAnchor {
 #[derive(PartialEq, Eq, Debug)]
 pub enum ButtonState {
     None,
-    Hovering,
-    Pressing
+    Highlighted
 }
