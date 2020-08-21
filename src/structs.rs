@@ -272,7 +272,7 @@ pub enum Rotating {
     Not
 }
 
-//Which AI routine to use for a given entity
+//Determines what to do during the update step for a given entity
 pub enum Brain {
     PlayerInput,
     DumbAI(AIState),
