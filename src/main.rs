@@ -192,7 +192,6 @@ fn main() {
 
 	//OpenGL static configuration
 	unsafe {
-		gl::Enable(gl::DEPTH_TEST);										//Enable depth testing
 		gl::Enable(gl::CULL_FACE);										//Enable face culling
 		gl::DepthFunc(gl::LESS);										//Pass the fragment with the smallest z-value.
 		gl::Enable(gl::FRAMEBUFFER_SRGB); 								//Enable automatic linear->SRGB space conversion
@@ -544,7 +543,7 @@ fn main() {
 	//Main Menu data
 	let mut main_menu = Menu::new(
 		vec!["Single player", "Multiplayer", "Settings", "Exit"],
-		vec![None, None, None, None],
+		vec![None, None, None, Some(Command::Quit)],
 		UIAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
 	);
 	main_menu.toggle(&mut ui_buttons, &mut sections, &mut glyph_brush);
@@ -1005,6 +1004,9 @@ fn main() {
 		//Rendering
 		const TEXTURE_MAP_IDENTIFIERS: [&str; 4] = ["albedo_map", "normal_map", "roughness_map", "shadow_map"];
 		unsafe {
+			//Enable depth testing
+			gl::Enable(gl::DEPTH_TEST);
+
 			//Bind shadow framebuffer
 			shadow_rendertarget.bind();
 
@@ -1140,8 +1142,8 @@ fn main() {
 				}
 			}
 
-			//Clear the depth buffer before rendering 2D elements
-			gl::Clear(gl::DEPTH_BUFFER_BIT);
+			//Before rendering 2D elements			
+			gl::Disable(gl::DEPTH_TEST);			//Disable depth testing			
 
 			//Render UI buttons
 			if let Some(vao) = ui_vao {

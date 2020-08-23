@@ -9,5 +9,5 @@ uniform mat4 clipping_from_screen;
 
 void main() {
     f_color = color;
-    gl_Position = clipping_from_screen * vec4(position, 0.1, 1.0);
+    gl_Position = clipping_from_screen * vec4(position, 0.0, 1.0);
 }
