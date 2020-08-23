@@ -1,4 +1,4 @@
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, Clone)]
 pub enum InputType {
     Key(glfw::Key),
     Mouse(glfw::MouseButton)
@@ -17,5 +17,7 @@ pub enum Command {
     MoveBackwards,
     StopMoving,
     Fire,
-    TogglePauseMenu
+    TogglePauseMenu,
+    StartGame,
+    ResetGame
 }

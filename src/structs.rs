@@ -1,9 +1,11 @@
 use gl::types::*;
+use glfw::Action;
 use std::clone::Clone;
 use std::collections::HashMap;
 use std::ptr;
 use ozy_engine::{glutil, routines};
 use crate::DEFAULT_TEX_PARAMS;
+use crate::input::{Command, InputType};
 
 pub struct StaticGeometry {
     pub vao: GLuint,
@@ -284,8 +286,31 @@ impl AIState {
     }
 }
 
+pub struct GameState {
+    pub kind: GameStateKind,
+    input_maps: HashMap<GameStateKind, HashMap<(InputType, Action), Command>>,
+}
+
+impl<'a> GameState {
+    pub fn new(kind: GameStateKind, input_maps: HashMap<GameStateKind, HashMap<(InputType, Action), Command>>) -> Self {
+        GameState {
+            kind,
+            input_maps,
+        }
+    }
+
+    pub fn input_map(&self) -> HashMap<(InputType, Action), Command> {
+        match self.input_maps.get(&self.kind) {
+            Some(map) => { map.clone() }
+            None => { self.input_maps.get(&GameStateKind::MainMenu).unwrap().clone() }
+        }
+    }
+}
+
 //State that controls what is updated and what is drawn
-pub enum GameState {
+#[derive(Eq, PartialEq, Hash)]
+pub enum GameStateKind {
+    InitGame,
     Playing,
     MainMenu,
     Paused,
