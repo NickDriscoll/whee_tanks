@@ -5,12 +5,12 @@ use std::os::raw::c_void;
 use std::time::Instant;
 use glfw::{Action, Context, Key, MouseButton, WindowEvent, WindowMode};
 use gl::types::*;
-use glyph_brush::{ab_glyph::{FontArc, PxScale}, BrushAction, BrushError, GlyphBrushBuilder, GlyphCruncher, GlyphVertex, Section, Text};
+use glyph_brush::{ab_glyph::{FontArc, PxScale}, BrushAction, BrushError, GlyphBrushBuilder, GlyphVertex, Section, Text};
 use ozy_engine::{glutil, routines};
 use ozy_engine::structs::OptionVec;
 use crate::structs::*;
 use crate::input::{Command, InputType};
-use crate::ui::{ButtonState, Menu, UIAnchor, UISystem};
+use crate::ui::{ButtonState, Menu, UIAnchor, UIButton};
 
 mod structs;
 mod input;
@@ -120,6 +120,23 @@ fn insert_index_buffer_quad(index_buffer: &mut [u16], i: usize) {
 	index_buffer[i * 6 + 3] = index_buffer[i * 6] + 3;
 	index_buffer[i * 6 + 4] = index_buffer[i * 6] + 2;
 	index_buffer[i * 6 + 5] = index_buffer[i * 6] + 1;
+}
+
+const FLOATS_PER_COLOR: usize = 4;
+const COLORS_PER_BUTTON: usize = 4;
+unsafe fn update_ui_button_color_buffer(buffer: GLuint, index: usize, color: [f32; FLOATS_PER_COLOR]) {
+	let mut data = vec![0.0; FLOATS_PER_COLOR * COLORS_PER_BUTTON];
+	for i in 0..(data.len() / FLOATS_PER_COLOR) {
+		data[i * FLOATS_PER_COLOR] = color[0];
+		data[i * FLOATS_PER_COLOR + 1] = color[1];
+		data[i * FLOATS_PER_COLOR + 2] = color[2];
+		data[i * FLOATS_PER_COLOR + 3] = color[3];
+	}
+	gl::BindBuffer(gl::ARRAY_BUFFER, buffer);
+	gl::BufferSubData(gl::ARRAY_BUFFER,
+					(COLORS_PER_BUTTON * FLOATS_PER_COLOR * index * mem::size_of::<GLfloat>()) as GLintptr,
+					(FLOATS_PER_COLOR * COLORS_PER_BUTTON * mem::size_of::<GLfloat>()) as GLsizeiptr,
+					&data[0] as *const GLfloat as *const c_void);
 }
 
 pub unsafe fn draw_ui_elements(vao: GLuint, shader: GLuint, count: usize, clipping_from_screen: &glm::TMat4<f32>) {
@@ -261,7 +278,7 @@ fn main() {
 	};
 
 	//Array of all tanks
-	let mut tanks: OptionVec<Tank> = OptionVec::new();
+	let mut tanks = OptionVec::new();
 
 	//Load the tank
 	let mut turret_origin = glm::zero();
@@ -328,7 +345,18 @@ fn main() {
 	};
 	
 	//Initialize the player's tank
-	let mut player_tank_id = 0;
+	let player_tank_id = {
+		let tank_forward = glm::vec3(-1.0, 0.0, 0.0);
+		let tank_position = glm::vec3(-4.5, 0.0, 0.0);
+		let tank = Tank::new(tank_position, tank_forward, &tank_skeleton, Brain::PlayerInput);
+		tanks.insert(tank)
+	};
+
+	//Add an enemy tank
+	let tank_forward = glm::vec3(1.0, 0.0, 0.0);
+	let tank_position = glm::vec3(4.5, 0.0, 0.0);
+	let tank = Tank::new(tank_position, tank_forward, &tank_skeleton, Brain::DumbAI(AIState::new()));
+	tanks.insert(tank);
 
 	//OptionVec of all fired tank shells
 	let mut shells: OptionVec<Shell> = OptionVec::new();
@@ -391,6 +419,27 @@ fn main() {
 	//Each frame this is filled with Command, then drained when processed
 	let mut command_buffer = Vec::new();
 
+	//Default keybindings
+	let mut key_bindings = {
+		let mut map = HashMap::new();
+
+		map.insert((InputType::Key(Key::Escape), Action::Press), Command::TogglePauseMenu);
+		map.insert((InputType::Key(Key::Q), Action::Press), Command::ToggleWireframe);
+		map.insert((InputType::Key(Key::W), Action::Press), Command::MoveForwards);
+		map.insert((InputType::Key(Key::S), Action::Press), Command::MoveBackwards);
+		map.insert((InputType::Key(Key::A), Action::Press), Command::RotateLeft);
+		map.insert((InputType::Key(Key::D), Action::Press), Command::RotateRight);
+		map.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
+
+		//The keys here depend on the earlier bindings
+		map.insert((InputType::Key(Key::W), Action::Release), Command::StopMoving);
+		map.insert((InputType::Key(Key::S), Action::Release), Command::StopMoving);
+		map.insert((InputType::Key(Key::A), Action::Release), Command::StopRotateLeft);
+		map.insert((InputType::Key(Key::D), Action::Release), Command::StopRotateRight);		
+
+		map
+	};
+
 	//Initialize the shadow map
 	let shadow_size = 8192;
 	let shadow_rendertarget = unsafe {
@@ -444,20 +493,11 @@ fn main() {
 									   0.0, 0.0, 0.0, 1.0) * glm::look_at(&glm::vec4_to_vec3(&(sun_direction * 4.0)), &glm::zero(), &glm::vec3(0.0, 1.0, 0.0));
 	let shadow_projection = glm::ortho(-ortho_size * 3.0, ortho_size * 3.0, -ortho_size * 3.0, ortho_size * 3.0, -ortho_size * 2.0, ortho_size * 3.0);
 
-	
-	let clipping_from_screen = glm::mat4(
-		2.0 / window_size.0 as f32, 0.0, 0.0, -1.0,
-		0.0, -(2.0 / window_size.1 as f32), 0.0, 1.0,
-		0.0, 0.0, 1.0, 0.0,
-		0.0, 0.0, 0.0, 1.0
-	);
-
 	let font = match FontArc::try_from_slice(include_bytes!("../fonts/Constantia.ttf")) {
 		Ok(s) => { s }
 		Err(e) => { panic!("{}", e) }
 	};
 	let mut glyph_brush = GlyphBrushBuilder::using_font(font).build();
-	/*
 
 	//Create the glyph texture
 	let glyph_texture = unsafe {
@@ -477,93 +517,50 @@ fn main() {
 	//Initialize glyph vao
 	let mut glyph_vao = None;
 	let mut glyph_count = 0;
+	let clipping_from_screen = glm::mat4(
+		2.0 / window_size.0 as f32, 0.0, 0.0, -1.0,
+		0.0, -(2.0 / window_size.1 as f32), 0.0, 1.0,
+		0.0, 0.0, 1.0, 0.0,
+		0.0, 0.0, 0.0, 1.0
+	);
 
 	//Array of text sections
 	let mut sections = OptionVec::new();
 
 	//Array of UI buttons
 	let mut ui_buttons: OptionVec<UIButton> = OptionVec::new();
-	let mut ui_button_update = false;
+	let mut last_ui_button_count = 0;
 	let mut ui_vao = None;
 	let mut button_color_instanced_buffer = 0;
-	*/
-
-	let mut ui_system = UISystem::new(glyph_brush);
 
 	//Pause menu data
 	let mut pause_menu = Menu::new(
 		vec!["Resume", "Settings", "Main Menu", "Exit"],
-		vec![Some(Command::TogglePauseMenu), None, Some(Command::ResetGame), Some(Command::Quit)],
+		vec![Some(Command::TogglePauseMenu), None, None, Some(Command::Quit)],
 		UIAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
 	);
 
 	//Main Menu data
 	let mut main_menu = Menu::new(
 		vec!["Single player", "Multiplayer", "Settings", "Exit"],
-		vec![Some(Command::StartGame), None, None, Some(Command::Quit)],
+		vec![None, None, None, Some(Command::Quit)],
 		UIAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
 	);
-	main_menu.toggle(&mut ui_system);
+	main_menu.toggle(&mut ui_buttons, &mut sections, &mut glyph_brush);
 
 	//Title text
-	let mut title_section = {
+	let title_section = {
 		let font_size = 72.0;
 		let section = Section::new();
 		let mut text = Text::new("Whee! Tanks! for ipad").with_color([1.0, 1.0, 1.0, 1.0]);
 		text.scale = PxScale::from(font_size);
 		section.add_text(text)
 	};
-	let bounding_box = match glyph_brush.glyph_bounds(&title_section) {
-		Some(rect) => { rect }
-		None => { panic!("Error wrt title section"); }
-	};
-	title_section.screen_position = (
-		window_size.0 as f32 / 2.0 - bounding_box.width() / 2.0,
-		20.0
-	);
-	let title_index = ui_system.sections.insert(title_section);
+	sections.insert(title_section);
 
-	let mut image_effect = ImageEffect::None;
-	
 	//Variable that determines what the update step looks like
-	let mut game_state = {
-		let mut input_maps = HashMap::new();
-
-		//Gameplay keybindings
-		let key_bindings = {
-			let mut map = HashMap::new();
-
-			map.insert((InputType::Key(Key::Escape), Action::Press), Command::TogglePauseMenu);
-			map.insert((InputType::Key(Key::Q), Action::Press), Command::ToggleWireframe);
-			map.insert((InputType::Key(Key::W), Action::Press), Command::MoveForwards);
-			map.insert((InputType::Key(Key::S), Action::Press), Command::MoveBackwards);
-			map.insert((InputType::Key(Key::A), Action::Press), Command::RotateLeft);
-			map.insert((InputType::Key(Key::D), Action::Press), Command::RotateRight);
-			map.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
-
-			//The keys here depend on the earlier bindings
-			map.insert((InputType::Key(Key::W), Action::Release), Command::StopMoving);
-			map.insert((InputType::Key(Key::S), Action::Release), Command::StopMoving);
-			map.insert((InputType::Key(Key::A), Action::Release), Command::StopRotateLeft);
-			map.insert((InputType::Key(Key::D), Action::Release), Command::StopRotateRight);
-
-			map
-		};
-		input_maps.insert(GameStateKind::Playing, key_bindings);
-
-		//Pause menu keybindings
-		let key_bindings = {
-			let mut map = HashMap::new();
-			map.insert((InputType::Key(Key::Escape), Action::Press), Command::TogglePauseMenu);
-			map
-		};
-		input_maps.insert(GameStateKind::Paused, key_bindings);
-
-		//Main menu keybindings
-		input_maps.insert(GameStateKind::MainMenu, HashMap::new());
-
-		GameState::new(GameStateKind::MainMenu, input_maps)
-	};
+	let mut game_state = GameState::MainMenu;
+	let mut image_effect = ImageEffect::None;
 
 	//Main loop
     while !window.should_close() {
@@ -578,17 +575,16 @@ fn main() {
 		};
 
 		//Handle window events
-		let input_map = game_state.input_map();
         for (_, event) in glfw::flush_messages(&events) {
             match event {
 				WindowEvent::Close => { window.set_should_close(true); }
 				WindowEvent::Key(key, _, action, ..) => {
-					if let Some(command) = input_map.get(&(InputType::Key(key), action)) {
+					if let Some(command) = key_bindings.get(&(InputType::Key(key), action)) {
 						command_buffer.push(*command);
 					}
 				}
 				WindowEvent::MouseButton(button, action, ..) => {
-					if let Some(command) = input_map.get(&(InputType::Mouse(button), action)) {
+					if let Some(command) = key_bindings.get(&(InputType::Mouse(button), action)) {
 						command_buffer.push(*command);
 					}
 
@@ -606,8 +602,8 @@ fn main() {
 		
 		//Handle input from the UI buttons
 		let mut current_button = 0;
-		for i in 0..ui_system.buttons.len() {
-			if let Some(button) = ui_system.buttons.get_mut_element(i) {
+		for i in 0..ui_buttons.len() {
+			if let Some(button) = ui_buttons.get_mut_element(i) {
 				if screen_space_mouse.x > button.bounds.min[0] &&
 				   screen_space_mouse.x < button.bounds.max[0] &&
 				   screen_space_mouse.y > button.bounds.min[1] &&
@@ -626,14 +622,14 @@ fn main() {
 						} else {
 							[0.0, 0.4, 0.0, 0.5]
 						};
-						unsafe { ui_system.update_button_color(current_button, color); }
+						unsafe { update_ui_button_color_buffer(button_color_instanced_buffer, current_button, color); }
 
 						button.state = ButtonState::Highlighted;
 					}
 				} else {
 					if button.state != ButtonState::None {
 						let color = [0.0, 0.0, 0.0, 0.5];
-						unsafe { ui_system.update_button_color(current_button, color); }
+						unsafe { update_ui_button_color_buffer(button_color_instanced_buffer, current_button, color); }
 
 						button.state = ButtonState::None;
 					}
@@ -687,9 +683,9 @@ fn main() {
 					}
 				}
 				Command::TogglePauseMenu => {
-					match game_state.kind {
-						GameStateKind::Paused => { game_state.kind = GameStateKind::Resuming; }
-						GameStateKind::Playing => { game_state.kind = GameStateKind::Pausing; }
+					match game_state {
+						GameState::Paused => { game_state = GameState::Resuming; }
+						GameState::Playing => { game_state = GameState::Pausing; }
 						_ => {}
 					}
 				}
@@ -698,43 +694,12 @@ fn main() {
 						tank.firing = true;
 					}
 				}
-				Command::StartGame => {
-					game_state.kind = GameStateKind::InitGame;
-					main_menu.toggle(&mut ui_system);
-					ui_system.sections.delete(title_index);
-				}
-				Command::ResetGame => {
-					ui_system.buttons.clear();
-					ui_system.sections.clear();
-					main_menu.toggle(&mut ui_system);
-					game_state.kind = GameStateKind::MainMenu;
-					image_effect = ImageEffect::Blur;
-				}
 			}
 		}
 
-		//-----------Simulating----------- 
-		match game_state.kind {
-			GameStateKind::InitGame => {
-				tanks.clear();
-
-				//Initialize the player's tank
-				player_tank_id = {
-					let tank_forward = glm::vec3(-1.0, 0.0, 0.0);
-					let tank_position = glm::vec3(-4.5, 0.0, 0.0);
-					let tank = Tank::new(tank_position, tank_forward, &tank_skeleton, Brain::PlayerInput);
-					tanks.insert(tank)
-				};
-
-				//Add an enemy tank
-				let tank_forward = glm::vec3(1.0, 0.0, 0.0);
-				let tank_position = glm::vec3(4.5, 0.0, 0.0);
-				let tank = Tank::new(tank_position, tank_forward, &tank_skeleton, Brain::DumbAI(AIState::new()));
-				tanks.insert(tank);
-
-				game_state.kind = GameStateKind::Playing;
-			}
-			GameStateKind::Playing => {
+		//-----------Simulating-----------
+		match game_state {
+			GameState::Playing => {
 				elapsed_time += delta_time;
 
 				let mut player_origin = glm::vec4(0.0, 0.0, 0.0, 1.0);
@@ -855,29 +820,33 @@ fn main() {
 					}
 				}
 			}
-			GameStateKind::Pausing => {
+			GameState::Pausing => {
 				//Enable the pause menu
-				pause_menu.toggle(&mut ui_system);
+				pause_menu.toggle(&mut ui_buttons, &mut sections, &mut glyph_brush);
 
-				game_state.kind = GameStateKind::Paused;
+				key_bindings.remove(&(InputType::Mouse(MouseButton::Button1), Action::Press));
+				game_state = GameState::Paused;
 				image_effect = ImageEffect::Blur;
 			}
-			GameStateKind::Resuming => {
+			GameState::Resuming => {
 				//Remove the pause menu from the ui button list
-				pause_menu.toggle(&mut ui_system);
+				pause_menu.toggle(&mut ui_buttons, &mut sections, &mut glyph_brush);
 
-				game_state.kind = GameStateKind::Playing;
+				//Re-enable normal controls
+				key_bindings.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
+
+				game_state = GameState::Playing;
 				image_effect = ImageEffect::None;
 			}
-			GameStateKind::MainMenu => {}
-			GameStateKind::Paused => {}
+			GameState::MainMenu => {}
+			GameState::Paused => {}
 		}
 		last_mouse_lbutton_pressed = mouse_lbutton_pressed;
 
 		//-----------Constructing UI elements for rendering-----------
 
 		//Queue glyph_brush sections
-		for sec in ui_system.sections.iter() {
+		for sec in sections.iter() {
 			if let Some(s) = sec {
 				glyph_brush.queue(s);
 			}			
@@ -886,7 +855,7 @@ fn main() {
 		//glyph_brush processing
 		let mut glyph_result = glyph_brush.process_queued(|rect, tex_data| unsafe {
 			gl::TextureSubImage2D(
-				ui_system.glyph_texture,
+				glyph_texture,
 				0,
 				rect.min[0] as _,
 				rect.min[1] as _,
@@ -902,13 +871,13 @@ fn main() {
 		while let Err(BrushError::TextureTooSmall { suggested }) = glyph_result {
 			let (width, height) = suggested;
 			unsafe {
-				gl::BindTexture(gl::TEXTURE_2D, ui_system.glyph_texture);
+				gl::BindTexture(gl::TEXTURE_2D, glyph_texture);
 				gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RED as GLint, width as GLint, height as GLint, 0, gl::RED, gl::UNSIGNED_BYTE, ptr::null());
 			}
 			glyph_brush.resize_texture(width, height);
 			glyph_result = glyph_brush.process_queued(|rect, tex_data| unsafe {
 				gl::TextureSubImage2D(
-					ui_system.glyph_texture,
+					glyph_texture,
 					0,
 					rect.min[0] as _,
 					rect.min[1] as _,
@@ -935,21 +904,21 @@ fn main() {
 						//Fill out index buffer
 						insert_index_buffer_quad(&mut index_buffer, i);
 					}
-					ui_system.glyph_count = verts.len();
+					glyph_count = verts.len();
 
-					match ui_system.glyph_vao {
+					match glyph_vao {
 						Some(mut vao) => unsafe {						
 							gl::DeleteVertexArrays(1, &mut vao);
-							ui_system.glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &[2, 2]));
+							glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &[2, 2]));
 						}
 						None => unsafe {
-							ui_system.glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &[2, 2]));
+							glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &[2, 2]));
 						}
 					}
 				} else {
-					if let Some(mut vao) = ui_system.glyph_vao {
+					if let Some(mut vao) = glyph_vao {
 						unsafe { gl::DeleteVertexArrays(1, &mut vao); }
-						ui_system.lyph_vao = None;
+						glyph_vao = None;
 					}
 				}
 			}
@@ -957,15 +926,15 @@ fn main() {
 		}
 
 		//Create vao for the ui buttons
-		if ui_system.buttons.count() > 0 && ui_system.update {
+		if ui_buttons.count() > 0 && ui_buttons.count() != last_ui_button_count {
 			unsafe { 
 				let floats_per_button = 4 * 2;
-				let mut vertices = vec![0.0; ui_system.buttons.count() * floats_per_button];
-				let mut indices = vec![0u16; ui_system.buttons.count() * 6];
+				let mut vertices = vec![0.0; ui_buttons.count() * floats_per_button];
+				let mut indices = vec![0u16; ui_buttons.count() * 6];
 
 				let mut quads_added = 0;
-				for i in 0..ui_system.buttons.len() {
-					if let Some(button) = &ui_system.buttons[i] {
+				for i in 0..ui_buttons.len() {
+					if let Some(button) = &ui_buttons[i] {
 						vertices[quads_added * floats_per_button] = button.bounds.min[0];
 						vertices[quads_added * floats_per_button + 1] = button.bounds.min[1];
 						vertices[quads_added * floats_per_button + 2] = button.bounds.min[0];
@@ -981,25 +950,25 @@ fn main() {
 					}
 				}
 
-				match ui_system.button_vao {
+				match ui_vao {
 					Some(mut vao) => {
 						gl::DeleteVertexArrays(1, &mut vao);
-						ui_system.button_vao = Some(glutil::create_vertex_array_object(&vertices, &indices, &[2]));
+						ui_vao = Some(glutil::create_vertex_array_object(&vertices, &indices, &[2]));
 						gl::BindVertexArray(vao);
 					}
 					None => {
 						let vao = glutil::create_vertex_array_object(&vertices, &indices, &[2]);
-						ui_system.button_vao = Some(vao);
+						ui_vao = Some(vao);
 						gl::BindVertexArray(vao);
 					}
 				}
 
 				//Create GPU buffer for ui button colors
-				ui_system.button_color_instanced_buffer = {
-					let element_count = ui_system.buttons.count() * UISystem::COLORS_PER_BUTTON * UISystem::FLOATS_PER_COLOR;
+				button_color_instanced_buffer = {
+					let element_count = ui_buttons.count() * COLORS_PER_BUTTON * FLOATS_PER_COLOR;
 
 					let mut data = vec![0.0f32; element_count];
-					for i in 0..(data.len() / UISystem::FLOATS_PER_COLOR) {
+					for i in 0..(data.len() / FLOATS_PER_COLOR) {
 						data[i * 4] = 0.0;
 						data[i * 4 + 1] = 0.0;
 						data[i * 4 + 2] = 0.0;
@@ -1016,19 +985,20 @@ fn main() {
 											4,
 											gl::FLOAT,
 											gl::FALSE,
-											(UISystem::FLOATS_PER_COLOR * mem::size_of::<GLfloat>()) as GLsizei,
+											(FLOATS_PER_COLOR * mem::size_of::<GLfloat>()) as GLsizei,
 											ptr::null());
 					gl::EnableVertexAttribArray(1);
 
 					b
 				};
 			}
-		} else if ui_system.buttons.count() == 0 {
-			if let Some(mut vao) = ui_system.button_vao {
+		} else if ui_buttons.count() == 0 {
+			if let Some(mut vao) = ui_vao {
 				unsafe { gl::DeleteVertexArrays(1, &mut vao); }
-				ui_system.button_vao = None;
+				ui_vao = None;
 			}
 		}
+		last_ui_button_count = ui_buttons.count();
 
 
 		//Rendering
@@ -1173,20 +1143,20 @@ fn main() {
 			}
 
 			//Before rendering 2D elements			
-			gl::Disable(gl::DEPTH_TEST);		//Disable depth testing			
+			gl::Disable(gl::DEPTH_TEST);			//Disable depth testing			
 
 			//Render UI buttons
-			if let Some(vao) = ui_system.button_vao {
-				draw_ui_elements(vao, ui_shader, ui_system.buttons.count(), &clipping_from_screen);
+			if let Some(vao) = ui_vao {
+				draw_ui_elements(vao, ui_shader, ui_buttons.count(), &clipping_from_screen);
 			}
 
 			//Render text
-			if let Some(vao) = ui_system.glyph_vao {
+			if let Some(vao) = glyph_vao {
 				initialize_texture_samplers(glyph_shader, &["glyph_texture"]);
 				gl::ActiveTexture(gl::TEXTURE0);
-				gl::BindTexture(gl::TEXTURE_2D, ui_system.glyph_texture);
+				gl::BindTexture(gl::TEXTURE_2D, glyph_texture);
 
-				draw_ui_elements(vao, glyph_shader, ui_system.glyph_count, &clipping_from_screen);
+				draw_ui_elements(vao, glyph_shader, glyph_count, &clipping_from_screen);
 			}
 		}
 
