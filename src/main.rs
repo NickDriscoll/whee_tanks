@@ -5,7 +5,7 @@ use std::os::raw::c_void;
 use std::time::Instant;
 use glfw::{Action, Context, Key, MouseButton, WindowEvent, WindowMode};
 use gl::types::*;
-use glyph_brush::{ab_glyph::{FontArc, PxScale}, BrushAction, BrushError, GlyphBrushBuilder, GlyphVertex, Section, Text};
+use glyph_brush::{ab_glyph::{FontArc, PxScale}, BrushAction, BrushError, GlyphBrushBuilder, GlyphCruncher, GlyphVertex, Section, Text};
 use ozy_engine::{glutil, routines};
 use ozy_engine::structs::OptionVec;
 use crate::structs::*;
@@ -355,7 +355,7 @@ fn main() {
 	//Add an enemy tank
 	let tank_forward = glm::vec3(1.0, 0.0, 0.0);
 	let tank_position = glm::vec3(4.5, 0.0, 0.0);
-	let tank = Tank::new(tank_position, tank_forward, &tank_skeleton, Brain::DumbAI(AIState::new()));
+	let tank = Tank::new(tank_position, tank_forward, &tank_skeleton, Brain::DumbAI);
 	tanks.insert(tank);
 
 	//OptionVec of all fired tank shells
@@ -418,27 +418,6 @@ fn main() {
 
 	//Each frame this is filled with Command, then drained when processed
 	let mut command_buffer = Vec::new();
-
-	//Default keybindings
-	let mut key_bindings = {
-		let mut map = HashMap::new();
-
-		map.insert((InputType::Key(Key::Escape), Action::Press), Command::TogglePauseMenu);
-		map.insert((InputType::Key(Key::Q), Action::Press), Command::ToggleWireframe);
-		map.insert((InputType::Key(Key::W), Action::Press), Command::MoveForwards);
-		map.insert((InputType::Key(Key::S), Action::Press), Command::MoveBackwards);
-		map.insert((InputType::Key(Key::A), Action::Press), Command::RotateLeft);
-		map.insert((InputType::Key(Key::D), Action::Press), Command::RotateRight);
-		map.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
-
-		//The keys here depend on the earlier bindings
-		map.insert((InputType::Key(Key::W), Action::Release), Command::StopMoving);
-		map.insert((InputType::Key(Key::S), Action::Release), Command::StopMoving);
-		map.insert((InputType::Key(Key::A), Action::Release), Command::StopRotateLeft);
-		map.insert((InputType::Key(Key::D), Action::Release), Command::StopRotateRight);		
-
-		map
-	};
 
 	//Initialize the shadow map
 	let shadow_size = 8192;
@@ -542,8 +521,8 @@ fn main() {
 
 	//Main Menu data
 	let mut main_menu = Menu::new(
-		vec!["Single player", "Multiplayer", "Settings", "Exit"],
-		vec![None, None, None, Some(Command::Quit)],
+		vec!["Singleplayer", "Multiplayer", "Settings", "Exit"],
+		vec![Some(Command::StartPlaying), None, None, Some(Command::Quit)],
 		UIAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
 	);
 	main_menu.toggle(&mut ui_buttons, &mut sections, &mut glyph_brush);
@@ -554,12 +533,46 @@ fn main() {
 		let section = Section::new();
 		let mut text = Text::new("Whee! Tanks! for ipad").with_color([1.0, 1.0, 1.0, 1.0]);
 		text.scale = PxScale::from(font_size);
-		section.add_text(text)
+		let mut section = section.add_text(text);
+	
+		let bounding_box = glyph_brush.glyph_bounds(&section).unwrap();
+		section.screen_position = (
+			window_size.0 as f32 / 2.0 - bounding_box.width() / 2.0,
+			40.0
+		);
+		section
 	};
-	sections.insert(title_section);
+	let title_section_index = sections.insert(title_section);
+
+	//Default keybindings
+	let mut game_state = {
+		let mut input_maps = HashMap::new();
+		let mut key_bindings = {
+			let mut map = HashMap::new();
+
+			map.insert((InputType::Key(Key::Escape), Action::Press), Command::TogglePauseMenu);
+			map.insert((InputType::Key(Key::Q), Action::Press), Command::ToggleWireframe);
+			map.insert((InputType::Key(Key::W), Action::Press), Command::MoveForwards);
+			map.insert((InputType::Key(Key::S), Action::Press), Command::MoveBackwards);
+			map.insert((InputType::Key(Key::A), Action::Press), Command::RotateLeft);
+			map.insert((InputType::Key(Key::D), Action::Press), Command::RotateRight);
+			map.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
+
+			//The keys here depend on the earlier bindings
+			map.insert((InputType::Key(Key::W), Action::Release), Command::StopMoving);
+			map.insert((InputType::Key(Key::S), Action::Release), Command::StopMoving);
+			map.insert((InputType::Key(Key::A), Action::Release), Command::StopRotateLeft);
+			map.insert((InputType::Key(Key::D), Action::Release), Command::StopRotateRight);		
+
+			map
+		};
+		input_maps.insert(GameStateKind::Playing, key_bindings);
+
+		GameState::new(GameStateKind::MainMenu, input_maps)
+	};
 
 	//Variable that determines what the update step looks like
-	let mut game_state = GameState::MainMenu;
+	//let mut game_state = GameStateKind::MainMenu;
 	let mut image_effect = ImageEffect::None;
 
 	//Main loop
@@ -575,6 +588,7 @@ fn main() {
 		};
 
 		//Handle window events
+		let key_bindings = game_state.get_input_map();
         for (_, event) in glfw::flush_messages(&events) {
             match event {
 				WindowEvent::Close => { window.set_should_close(true); }
@@ -683,9 +697,9 @@ fn main() {
 					}
 				}
 				Command::TogglePauseMenu => {
-					match game_state {
-						GameState::Paused => { game_state = GameState::Resuming; }
-						GameState::Playing => { game_state = GameState::Pausing; }
+					match game_state.kind {
+						GameStateKind::Paused => { game_state.kind = GameStateKind::Resuming; }
+						GameStateKind::Playing => { game_state.kind = GameStateKind::Pausing; }
 						_ => {}
 					}
 				}
@@ -694,12 +708,17 @@ fn main() {
 						tank.firing = true;
 					}
 				}
+				Command::StartPlaying => {
+					main_menu.hide(&mut ui_buttons, &mut sections);
+					sections.delete(title_section_index);
+					game_state.kind = GameStateKind::Playing;
+				}
 			}
 		}
 
 		//-----------Simulating-----------
-		match game_state {
-			GameState::Playing => {
+		match game_state.kind {
+			GameStateKind::Playing => {
 				elapsed_time += delta_time;
 
 				let mut player_origin = glm::vec4(0.0, 0.0, 0.0, 1.0);
@@ -747,26 +766,27 @@ fn main() {
 								//Point the turret at the mouse cursor
 								aim_target = intersection;
 							}
-							Brain::DumbAI(ref mut ai_state) => {
-								let shot_cooldown = 0.5;
-
+							Brain::DumbAI => {
 								//Point at player
 								aim_target = player_origin;
 
-								//Fire if ready
-								if elapsed_time > ai_state.last_shot_time + shot_cooldown {
-									tank.firing = true;
-									ai_state.last_shot_time = elapsed_time;
-								}
+								//Set firing flag
+								tank.firing = true;
 							}
 						}
 						tank.aim_turret(&aim_target);
 
-						//Fire a shell if the tank's firing flag is set
+						//Fire a shell if the tank's firing flag is set and if the tank is not in cooldown
 						if tank.firing {
+							tank.firing = false;
+							if elapsed_time < tank.last_shot_time + Tank::SHOT_COOLDOWN {
+								break;
+							}
+							tank.last_shot_time = elapsed_time;
+
 							let transform = tank.bones[1].transform;
 							let position = transform * glm::vec4(0.0, 0.0, 0.0, 1.0);
-							let velocity = tank.turret_forward * 2.0;
+							let velocity = tank.turret_forward * Shell::VELOCITY;
 
 							shells.insert(Shell {
 								position,
@@ -774,7 +794,6 @@ fn main() {
 								transform,
 								spawn_time: elapsed_time as f32
 							});
-							tank.firing = false;
 						}
 					}
 				}
@@ -786,8 +805,7 @@ fn main() {
 				for i in 0..shells.len() {
 					if let Some(shell) = shells.get_mut_element(i) {
 						//Check if the shell needs to be de-spawned
-						let shell_lifetime = 5.0;
-						if elapsed_time > shell.spawn_time + shell_lifetime {
+						if elapsed_time > shell.spawn_time + Shell::LIFETIME {
 							shells.delete(i);
 							continue;
 						}
@@ -820,26 +838,22 @@ fn main() {
 					}
 				}
 			}
-			GameState::Pausing => {
+			GameStateKind::Pausing => {
 				//Enable the pause menu
-				pause_menu.toggle(&mut ui_buttons, &mut sections, &mut glyph_brush);
+				pause_menu.show(&mut ui_buttons, &mut sections, &mut glyph_brush);
 
-				key_bindings.remove(&(InputType::Mouse(MouseButton::Button1), Action::Press));
-				game_state = GameState::Paused;
+				game_state.kind = GameStateKind::Paused;
 				image_effect = ImageEffect::Blur;
 			}
-			GameState::Resuming => {
+			GameStateKind::Resuming => {
 				//Remove the pause menu from the ui button list
-				pause_menu.toggle(&mut ui_buttons, &mut sections, &mut glyph_brush);
+				pause_menu.hide(&mut ui_buttons, &mut sections);
 
-				//Re-enable normal controls
-				key_bindings.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
-
-				game_state = GameState::Playing;
+				game_state.kind = GameStateKind::Playing;
 				image_effect = ImageEffect::None;
 			}
-			GameState::MainMenu => {}
-			GameState::Paused => {}
+			GameStateKind::MainMenu => {}
+			GameStateKind::Paused => {}
 		}
 		last_mouse_lbutton_pressed = mouse_lbutton_pressed;
 
@@ -1004,10 +1018,10 @@ fn main() {
 		//Rendering
 		const TEXTURE_MAP_IDENTIFIERS: [&str; 4] = ["albedo_map", "normal_map", "roughness_map", "shadow_map"];
 		unsafe {
-			//Enable depth testing
+			//Enable depth testing for 3D scene drawing
 			gl::Enable(gl::DEPTH_TEST);
 
-			//Bind shadow framebuffer
+			//Bind shadowmap fbo
 			shadow_rendertarget.bind();
 
 			//Bind shadow program

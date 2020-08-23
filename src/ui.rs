@@ -52,7 +52,7 @@ impl<'a> Menu<'a> {
     }
 
     //Adds this menu's data to the arrays of buttons and sections
-    fn show<'b>(&mut self, ui_buttons: &mut OptionVec<UIButton>, sections: &'b mut OptionVec<Section<'a>>, glyph_brush: &mut GlyphBrush<GlyphBrushVertexType>) {
+    pub fn show<'b>(&mut self, ui_buttons: &mut OptionVec<UIButton>, sections: &'b mut OptionVec<Section<'a>>, glyph_brush: &mut GlyphBrush<GlyphBrushVertexType>) {
         //Submit the pause menu data
 		const BORDER_WIDTH: f32 = 15.0;
 		const BUFFER_DISTANCE: f32 = 10.0;
@@ -120,7 +120,7 @@ impl<'a> Menu<'a> {
     }
 
     //Remove this menu's data from the arrays of buttons and sections
-    fn hide(&mut self, ui_buttons: &mut OptionVec<UIButton>, sections: &mut OptionVec<Section>) {
+    pub fn hide(&mut self, ui_buttons: &mut OptionVec<UIButton>, sections: &mut OptionVec<Section>) {
 		for id in self.ids.iter() {
 			if let Some(button) = &ui_buttons[*id] {
                 sections.delete(button.section_id());

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::ptr;
 use ozy_engine::{glutil, routines};
 use crate::DEFAULT_TEX_PARAMS;
+use crate::input::{Command, InputType};
 
 pub struct StaticGeometry {
     pub vao: GLuint,
@@ -71,6 +72,7 @@ pub struct Bone {
 pub struct Tank<'a> {
     pub position: glm::TVec3<f32>,
     pub speed: f32,
+    pub last_shot_time: f32,
     pub firing: bool,
     pub forward: glm::TVec3<f32>,
     pub move_state: TankMoving,
@@ -84,12 +86,14 @@ pub struct Tank<'a> {
 }
 
 impl<'a> Tank<'a> {
-    const SPEED: f32 = 2.5;
+    const SPEED: f32 = 2.0;
+    pub const SHOT_COOLDOWN: f32 = 1.5;
     
     pub fn new(position: glm::TVec3<f32>, forward: glm::TVec3<f32>, skeleton: &'a Skeleton, brain: Brain) -> Self {        
         Tank {
             position,
             speed: Self::SPEED,
+            last_shot_time: 0.0,
             firing: false,
             forward,
             move_state: TankMoving::Not,
@@ -124,6 +128,11 @@ pub struct Shell {
     pub velocity: glm::TVec4<f32>,
     pub transform: glm::TMat4<f32>,
     pub spawn_time: f32
+}
+
+impl Shell {
+    pub const VELOCITY: f32 = 2.0;
+    pub const LIFETIME: f32 = 5.0;
 }
 
 pub struct TextureKeeper {
@@ -269,23 +278,33 @@ pub enum TankMoving {
 //Determines what to do during the update step for a given entity
 pub enum Brain {
     PlayerInput,
-    DumbAI(AIState),
+    DumbAI,
 }
 
-pub struct AIState {
-    pub last_shot_time: f32
+pub struct GameState {
+    pub kind: GameStateKind,
+    input_maps: HashMap<GameStateKind, HashMap<(InputType, glfw::Action), Command>>
 }
 
-impl AIState {
-    pub fn new() -> Self {
-        AIState {
-            last_shot_time: 0.0
+impl GameState {
+    pub fn new(kind: GameStateKind, input_maps: HashMap<GameStateKind, HashMap<(InputType, glfw::Action), Command>>) -> Self {
+        GameState {
+            kind,
+            input_maps
+        }
+    }
+
+    pub fn get_input_map(&self) -> HashMap<(InputType, glfw::Action), Command> {
+        match self.input_maps.get(&self.kind) {
+            Some(map) => { map.clone() }
+            None => { HashMap::new() }
         }
     }
 }
 
 //State that controls what is updated and what is drawn
-pub enum GameState {
+#[derive(Eq, Hash, PartialEq)]
+pub enum GameStateKind {
     Playing,
     MainMenu,
     Paused,
