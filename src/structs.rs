@@ -83,7 +83,7 @@ pub struct Tank<'a> {
     pub bones: Vec<Bone>
 }
 
-impl<'a> Tank<'a> {    
+impl<'a> Tank<'a> {
     const SPEED: f32 = 2.5;
     
     pub fn new(position: glm::TVec3<f32>, forward: glm::TVec3<f32>, skeleton: &'a Skeleton, brain: Brain) -> Self {        

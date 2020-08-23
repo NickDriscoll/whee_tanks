@@ -1,0 +1,1 @@
+rustflags = ["--cfg"]  # custom flags for `rustc`

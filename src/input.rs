@@ -17,6 +17,5 @@ pub enum Command {
     MoveBackwards,
     StopMoving,
     Fire,
-    ToggleDebugMenu,
     TogglePauseMenu
 }

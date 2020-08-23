@@ -5,12 +5,12 @@ use std::os::raw::c_void;
 use std::time::Instant;
 use glfw::{Action, Context, Key, MouseButton, WindowEvent, WindowMode};
 use gl::types::*;
-use glyph_brush::{ab_glyph::{FontArc}, BrushAction, BrushError, GlyphBrushBuilder, GlyphVertex};
+use glyph_brush::{ab_glyph::{FontArc, PxScale}, BrushAction, BrushError, GlyphBrushBuilder, GlyphVertex, Section, Text};
 use ozy_engine::{glutil, routines};
 use ozy_engine::structs::OptionVec;
 use crate::structs::*;
 use crate::input::{Command, InputType};
-use crate::ui::{ButtonState, Menu, MenuAnchor, UIButton};
+use crate::ui::{ButtonState, Menu, UIAnchor, UIButton};
 
 mod structs;
 mod input;
@@ -58,6 +58,7 @@ fn glyph_vertex_transform(vertex: GlyphVertex) -> [f32; 16] {
 	]	
 }
 
+#[cfg(gloutput)]
 extern "system" fn gl_debug_callback(source: GLenum, gltype: GLenum, id: GLuint, severity: GLenum, length: GLsizei, message: *const GLchar, _: *mut c_void) {
 	println!("--------------------OpenGL debug message--------------------");
 	println!("ID: {}", id);
@@ -200,8 +201,12 @@ fn main() {
 		gl::ClearColor(0.53, 0.81, 0.92, 1.0);							//Set the clear color to a pleasant blue
 		gl::Enable(gl::DEBUG_OUTPUT);									//Enable verbose debug output
 		gl::Enable(gl::DEBUG_OUTPUT_SYNCHRONOUS);						//Synchronously call the debug callback function
-		gl::DebugMessageCallback(gl_debug_callback, ptr::null());		//Register the debug callback
-		gl::DebugMessageControl(gl::DONT_CARE, gl::DONT_CARE, gl::DONT_CARE, 0, ptr::null(), gl::TRUE);
+
+		#[cfg(gloutput)]
+		{
+			gl::DebugMessageCallback(gl_debug_callback, ptr::null());		//Register the debug callback
+			gl::DebugMessageControl(gl::DONT_CARE, gl::DONT_CARE, gl::DONT_CARE, 0, ptr::null(), gl::TRUE);
+		}
 	}
 
 	//Framebuffers used for image effects
@@ -425,7 +430,6 @@ fn main() {
 		map.insert((InputType::Key(Key::S), Action::Press), Command::MoveBackwards);
 		map.insert((InputType::Key(Key::A), Action::Press), Command::RotateLeft);
 		map.insert((InputType::Key(Key::D), Action::Press), Command::RotateRight);
-		map.insert((InputType::Key(Key::GraveAccent), Action::Press), Command::ToggleDebugMenu);
 		map.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
 
 		//The keys here depend on the earlier bindings
@@ -534,18 +538,29 @@ fn main() {
 	let mut pause_menu = Menu::new(
 		vec!["Resume", "Settings", "Main Menu", "Exit"],
 		vec![Some(Command::TogglePauseMenu), None, None, Some(Command::Quit)],
-		MenuAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
+		UIAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
 	);
 
-	//Debug menu data
-	let mut debug_menu = Menu::new(
-		vec!["Wireframe", "Toggle Edit Mode"],
-		vec![Some(Command::ToggleWireframe), None],
-		MenuAnchor::LeftAligned(10.0, 10.0)
+	//Main Menu data
+	let mut main_menu = Menu::new(
+		vec!["Single player", "Multiplayer", "Settings", "Exit"],
+		vec![None, None, None, None],
+		UIAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
 	);
+	main_menu.toggle(&mut ui_buttons, &mut sections, &mut glyph_brush);
+
+	//Title text
+	let title_section = {
+		let font_size = 72.0;
+		let section = Section::new();
+		let mut text = Text::new("Whee! Tanks! for ipad").with_color([1.0, 1.0, 1.0, 1.0]);
+		text.scale = PxScale::from(font_size);
+		section.add_text(text)
+	};
+	sections.insert(title_section);
 
 	//Variable that determines what the update step looks like
-	let mut game_state = GameState::Playing;
+	let mut game_state = GameState::MainMenu;
 	let mut image_effect = ImageEffect::None;
 
 	//Main loop
@@ -574,11 +589,7 @@ fn main() {
 						command_buffer.push(*command);
 					}
 
-					if action == Action::Press {
-						mouse_lbutton_pressed = true;
-					} else {						
-						mouse_lbutton_pressed = false;
-					}
+					mouse_lbutton_pressed = action == Action::Press;
 				}
 				WindowEvent::CursorPos(x, y) => {
 					screen_space_mouse = glm::vec2(x as f32, y as f32);
@@ -684,10 +695,6 @@ fn main() {
 						tank.firing = true;
 					}
 				}
-				Command::ToggleDebugMenu => {
-					//Toggle the debug menu
-					debug_menu.toggle(&mut ui_buttons, &mut sections, &mut glyph_brush);
-				}
 			}
 		}
 
@@ -702,7 +709,7 @@ fn main() {
 				}
 
 				//Update the tanks				
-				for j in 0..tanks.len() {					
+				for j in 0..tanks.len() {
 					if let Some(tank) = tanks.get_mut_element(j) {
 						//Update the tank's position
 						match tank.move_state {
@@ -742,7 +749,7 @@ fn main() {
 								aim_target = intersection;
 							}
 							Brain::DumbAI(ref mut ai_state) => {
-								let shot_cooldown = 2.0;
+								let shot_cooldown = 0.5;
 
 								//Point at player
 								aim_target = player_origin;
@@ -814,10 +821,9 @@ fn main() {
 					}
 				}
 			}
-			GameState::Paused => {}
 			GameState::Pausing => {
 				//Enable the pause menu
-				pause_menu.show(&mut ui_buttons, &mut sections, &mut glyph_brush);
+				pause_menu.toggle(&mut ui_buttons, &mut sections, &mut glyph_brush);
 
 				key_bindings.remove(&(InputType::Mouse(MouseButton::Button1), Action::Press));
 				game_state = GameState::Paused;
@@ -825,7 +831,7 @@ fn main() {
 			}
 			GameState::Resuming => {
 				//Remove the pause menu from the ui button list
-				pause_menu.hide(&mut ui_buttons, &mut sections);
+				pause_menu.toggle(&mut ui_buttons, &mut sections, &mut glyph_brush);
 
 				//Re-enable normal controls
 				key_bindings.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
@@ -833,11 +839,12 @@ fn main() {
 				game_state = GameState::Playing;
 				image_effect = ImageEffect::None;
 			}
-			_ => {}
+			GameState::MainMenu => {}
+			GameState::Paused => {}
 		}
 		last_mouse_lbutton_pressed = mouse_lbutton_pressed;
 
-		//-----------Rendering-----------
+		//-----------Constructing UI elements for rendering-----------
 
 		//Queue glyph_brush sections
 		for sec in sections.iter() {
@@ -994,6 +1001,8 @@ fn main() {
 		}
 		last_ui_button_count = ui_buttons.count();
 
+
+		//Rendering
 		const TEXTURE_MAP_IDENTIFIERS: [&str; 4] = ["albedo_map", "normal_map", "roughness_map", "shadow_map"];
 		unsafe {
 			//Bind shadow framebuffer
