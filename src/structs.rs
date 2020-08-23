@@ -74,7 +74,7 @@ pub struct Tank<'a> {
     pub firing: bool,
     pub forward: glm::TVec3<f32>,
     pub move_state: TankMoving,
-    pub rotating: Rotating,
+    pub rotating: f32,
     pub rotation: glm::TMat4<f32>,
     pub turret_forward: glm::TVec4<f32>,
     pub turret_origin: glm::TVec4<f32>,
@@ -93,7 +93,7 @@ impl<'a> Tank<'a> {
             firing: false,
             forward,
             move_state: TankMoving::Not,
-            rotating: Rotating::Not,
+            rotating: 0.0,
             rotation: glm::identity(),
             turret_forward: glm::vec4(1.0, 0.0, 0.0, 0.0),
             turret_origin: glm::vec4(0.0, 1.0, 0.0, 0.0),
@@ -263,12 +263,6 @@ impl RenderTarget {
 pub enum TankMoving {
     Forwards,
     Backwards,
-    Not
-}
-
-pub enum Rotating {
-    Left,
-    Right,
     Not
 }
 

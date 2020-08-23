@@ -11,10 +11,11 @@ pub enum Command {
     ToggleWireframe,
     RotateLeft,
     RotateRight,
+    StopRotateLeft,
+    StopRotateRight,
     MoveForwards,
     MoveBackwards,
     StopMoving,
-    StopRotating,
     Fire,
     ToggleDebugMenu,
     TogglePauseMenu

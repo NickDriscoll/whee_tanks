@@ -138,11 +138,11 @@ unsafe fn update_ui_button_color_buffer(buffer: GLuint, index: usize, color: [f3
 					&data[0] as *const GLfloat as *const c_void);
 }
 
-pub unsafe fn draw_ui_element(vao: GLuint, shader: GLuint, count: usize, clipping_from_screen: &glm::TMat4<f32>) {
+pub unsafe fn draw_ui_elements(vao: GLuint, shader: GLuint, count: usize, clipping_from_screen: &glm::TMat4<f32>) {
     gl::UseProgram(shader);
 	glutil::bind_matrix4(shader, "clipping_from_screen", &clipping_from_screen);
 	gl::BindVertexArray(vao);
-	gl::DrawElements(gl::TRIANGLES, 6 * count as GLint, gl::UNSIGNED_SHORT, ptr::null());    
+	gl::DrawElements(gl::TRIANGLES, 6 * count as GLint, gl::UNSIGNED_SHORT, ptr::null());
 }
 
 fn main() {
@@ -237,6 +237,7 @@ fn main() {
 	let passthrough_shader = unsafe { glutil::compile_program_from_files("shaders/postprocessing.vert", "shaders/postprocessing.frag") };
 	let gaussian_shader = unsafe { glutil::compile_program_from_files("shaders/postprocessing.vert", "shaders/gaussian_blur.frag") };
 	let ui_shader = unsafe { glutil::compile_program_from_files("shaders/ui_button.vert", "shaders/ui_button.frag") };
+	let edit_shader = unsafe { glutil::compile_program_from_files("shaders/mapped.vert", "shaders/edit.frag") };
 
 	//Initialize texture caching data structure
 	let mut texture_keeper = TextureKeeper::new();
@@ -339,8 +340,8 @@ fn main() {
 		}
 	};
 	
+	//Initialize the player's tank
 	let player_tank_id = {
-		//Initialize the tank's gameplay data
 		let tank_forward = glm::vec3(-1.0, 0.0, 0.0);
 		let tank_position = glm::vec3(-4.5, 0.0, 0.0);
 		let tank = Tank::new(tank_position, tank_forward, &tank_skeleton, Brain::PlayerInput);
@@ -353,11 +354,14 @@ fn main() {
 	let tank = Tank::new(tank_position, tank_forward, &tank_skeleton, Brain::DumbAI(AIState::new()));
 	tanks.insert(tank);
 
+	//OptionVec of all fired tank shells
+	let mut shells: OptionVec<Shell> = OptionVec::new();
+
 	//Load shell graphics
 	let shell_mesh = SimpleMesh::from_ozy("models/better_shell.ozy", &mut texture_keeper);
 	
 	//Create GPU buffer for instanced matrices
-	let shell_instanced_buffer = unsafe {
+	let shell_instanced_transforms = unsafe {
 		gl::BindVertexArray(shell_mesh.vao);
 
 		let mut b = 0;
@@ -381,9 +385,6 @@ fn main() {
 		b
 	};
 
-	//OptionVec of all fired tank shells
-	let mut shells: OptionVec<Shell> = OptionVec::new();
-
 	//Initialize some constant transforms
 	let view_from_world = glm::mat4(-1.0, 0.0, 0.0, 0.0,
 								0.0, 1.0, 0.0, 0.0,
@@ -403,6 +404,7 @@ fn main() {
 	let mut last_frame_instant = Instant::now();
 	let mut elapsed_time = 0.0;
 
+	//Mouse state
 	let mut world_space_mouse = world_from_clipping * glm::vec4(0.0, 0.0, 0.0, 1.0);
 	let mut screen_space_mouse = glm::vec2(0.0, 0.0);
 	let mut mouse_lbutton_pressed = false;
@@ -429,8 +431,8 @@ fn main() {
 		//The keys here depend on the earlier bindings
 		map.insert((InputType::Key(Key::W), Action::Release), Command::StopMoving);
 		map.insert((InputType::Key(Key::S), Action::Release), Command::StopMoving);
-		map.insert((InputType::Key(Key::A), Action::Release), Command::StopRotating);
-		map.insert((InputType::Key(Key::D), Action::Release), Command::StopRotating);		
+		map.insert((InputType::Key(Key::A), Action::Release), Command::StopRotateLeft);
+		map.insert((InputType::Key(Key::D), Action::Release), Command::StopRotateRight);		
 
 		map
 	};
@@ -589,6 +591,7 @@ fn main() {
 		}
 		
 		//Handle input from the UI buttons
+		let mut current_button = 0;
 		for i in 0..ui_buttons.len() {
 			if let Some(button) = ui_buttons.get_mut_element(i) {
 				if screen_space_mouse.x > button.bounds.min[0] &&
@@ -609,18 +612,19 @@ fn main() {
 						} else {
 							[0.0, 0.4, 0.0, 0.5]
 						};
-						unsafe { update_ui_button_color_buffer(button_color_instanced_buffer, i, color); }
+						unsafe { update_ui_button_color_buffer(button_color_instanced_buffer, current_button, color); }
 
 						button.state = ButtonState::Highlighted;
 					}
 				} else {
 					if button.state != ButtonState::None {
 						let color = [0.0, 0.0, 0.0, 0.5];
-						unsafe { update_ui_button_color_buffer(button_color_instanced_buffer, i, color); }
+						unsafe { update_ui_button_color_buffer(button_color_instanced_buffer, current_button, color); }
 
 						button.state = ButtonState::None;
 					}
-				}
+				}				
+				current_button += 1;
 			}
 		}
 		
@@ -645,12 +649,12 @@ fn main() {
 				}
 				Command::RotateLeft => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.rotating = Rotating::Left;
+						tank.rotating -= glm::half_pi::<f32>();
 					}
 				}
 				Command::RotateRight => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.rotating = Rotating::Right;
+						tank.rotating += glm::half_pi::<f32>();
 					}
 				}
 				Command::StopMoving => {
@@ -658,9 +662,14 @@ fn main() {
 						tank.move_state = TankMoving::Not;
 					}
 				}
-				Command::StopRotating => {
+				Command::StopRotateLeft => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.rotating = Rotating::Not;
+						tank.rotating += glm::half_pi::<f32>();
+					}
+				}
+				Command::StopRotateRight => {
+					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
+						tank.rotating -= glm::half_pi::<f32>();
 					}
 				}
 				Command::TogglePauseMenu => {
@@ -707,15 +716,7 @@ fn main() {
 						}
 
 						//Update the tank's forward vector
-						tank.forward = match tank.rotating {
-							Rotating::Left => {
-								glm::vec4_to_vec3(&(glm::rotation(-glm::half_pi::<f32>() * delta_time as f32, &glm::vec3(0.0, 1.0, 0.0)) * glm::vec3_to_vec4(&tank.forward)))
-							}
-							Rotating::Right => {
-								glm::vec4_to_vec3(&(glm::rotation(glm::half_pi::<f32>() * delta_time as f32, &glm::vec3(0.0, 1.0, 0.0)) * glm::vec3_to_vec4(&tank.forward)))
-							}
-							Rotating::Not => { tank.forward }
-						};
+						tank.forward = glm::vec4_to_vec3(&(glm::rotation(tank.rotating * delta_time, &glm::vec3(0.0, 1.0, 0.0)) * glm::vec3_to_vec4(&tank.forward)));
 
 						tank.rotation = {
 							let new_x = -glm::cross(&tank.forward, &glm::vec3(0.0, 1.0, 0.0));
@@ -778,6 +779,7 @@ fn main() {
 				let mut current_shell = 0;
 				for i in 0..shells.len() {
 					if let Some(shell) = shells.get_mut_element(i) {
+						//Check if the shell needs to be de-spawned
 						let shell_lifetime = 5.0;
 						if elapsed_time > shell.spawn_time + shell_lifetime {
 							shells.delete(i);
@@ -803,7 +805,7 @@ fn main() {
 				//Update GPU buffer storing shell transforms
 				if shell_transforms.len() > 0 {
 					unsafe {
-						gl::BindBuffer(gl::ARRAY_BUFFER, shell_instanced_buffer);
+						gl::BindBuffer(gl::ARRAY_BUFFER, shell_instanced_transforms);
 						gl::BufferSubData(gl::ARRAY_BUFFER,
 										0 as GLsizeiptr, 
 										(shell_transforms.len() * mem::size_of::<GLfloat>()) as GLsizeiptr,
@@ -915,7 +917,7 @@ fn main() {
 				}
 			}
 			BrushAction::ReDraw => {}
-		}	
+		}
 
 		//Create vao for the ui buttons
 		if ui_buttons.count() > 0 && ui_buttons.count() != last_ui_button_count {
@@ -957,9 +959,9 @@ fn main() {
 
 				//Create GPU buffer for ui button colors
 				button_color_instanced_buffer = {
-					let element_count = ui_buttons.count() * COLORS_PER_BUTTON;
+					let element_count = ui_buttons.count() * COLORS_PER_BUTTON * FLOATS_PER_COLOR;
 
-					let mut data = vec![0.0f32; element_count * FLOATS_PER_COLOR];
+					let mut data = vec![0.0f32; element_count];
 					for i in 0..(data.len() / FLOATS_PER_COLOR) {
 						data[i * 4] = 0.0;
 						data[i * 4 + 1] = 0.0;
@@ -970,7 +972,7 @@ fn main() {
 					let mut b = 0;
 					gl::GenBuffers(1, &mut b);
 					gl::BindBuffer(gl::ARRAY_BUFFER, b);
-					gl::BufferData(gl::ARRAY_BUFFER, (element_count * FLOATS_PER_COLOR * mem::size_of::<GLfloat>()) as GLsizeiptr, &data[0] as *const f32 as *const c_void, gl::DYNAMIC_DRAW);
+					gl::BufferData(gl::ARRAY_BUFFER, (element_count * mem::size_of::<GLfloat>()) as GLsizeiptr, &data[0] as *const f32 as *const c_void, gl::DYNAMIC_DRAW);
 
 					//Attach buffer to vao
 					gl::VertexAttribPointer(1,
@@ -1008,9 +1010,9 @@ fn main() {
 			}
 
 			//Render tank
+			gl::BindVertexArray(tank_skeleton.vao);
 			for i in 0..tanks.len() {
 				if let Some(tank) = &tanks[i] {
-					gl::BindVertexArray(tank.skeleton.vao);
 					for j in 0..tank.skeleton.node_list.len() {
 						let node_index = tank.skeleton.node_list[j];
 						glutil::bind_matrix4(shadow_shader, "mvp", &(shadow_projection * shadow_from_world * tank.bones[node_index].transform));
@@ -1033,7 +1035,7 @@ fn main() {
 			if is_wireframe { gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE); }
 			else { gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL); }
 
-			//Bind the GLSL program
+			//Bind program for texture-mapped objects
 			gl::UseProgram(mapped_shader);
 
 			//Set uniforms that are constant for the lifetime of the program
@@ -1055,9 +1057,9 @@ fn main() {
 			}
 
 			//Render the tanks
+			gl::BindVertexArray(tank_skeleton.vao);
 			for i in 0..tanks.len() {
 				if let Some(tank) = &tanks[i] {
-					gl::BindVertexArray(tank.skeleton.vao);
 					for j in 0..tank.skeleton.node_list.len() {
 						let node_index = tank.skeleton.node_list[j];
 						glutil::bind_matrix4(mapped_shader, "mvp", &(clipping_from_world * tank.bones[node_index].transform));
@@ -1134,7 +1136,7 @@ fn main() {
 
 			//Render UI buttons
 			if let Some(vao) = ui_vao {
-				draw_ui_element(vao, ui_shader, ui_buttons.count(), &clipping_from_screen);
+				draw_ui_elements(vao, ui_shader, ui_buttons.count(), &clipping_from_screen);
 			}
 
 			//Render text
@@ -1143,7 +1145,7 @@ fn main() {
 				gl::ActiveTexture(gl::TEXTURE0);
 				gl::BindTexture(gl::TEXTURE_2D, glyph_texture);
 
-				draw_ui_element(vao, glyph_shader, glyph_count, &clipping_from_screen);
+				draw_ui_elements(vao, glyph_shader, glyph_count, &clipping_from_screen);
 			}
 		}
 
