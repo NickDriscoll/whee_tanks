@@ -87,6 +87,8 @@ pub struct Tank<'a> {
 
 impl<'a> Tank<'a> {
     const SPEED: f32 = 2.0;
+    const HULL_INDEX: usize = 0;
+    const TURRET_INDEX: usize = 1;
     pub const SHOT_COOLDOWN: f32 = 1.5;
     
     pub fn new(position: glm::TVec3<f32>, forward: glm::TVec3<f32>, skeleton: &'a Skeleton, brain: Brain) -> Self {        
@@ -110,9 +112,9 @@ impl<'a> Tank<'a> {
     pub fn aim_turret(&mut self, target: &glm::TVec4<f32>) {
         //Point turret at target
         self.turret_forward = glm::normalize(&(target - self.turret_origin));
-        self.bones[1].transform = {
+        self.bones[Self::TURRET_INDEX].transform = {
             let new_x = -glm::cross(&glm::vec4_to_vec3(&-self.turret_forward), &glm::vec3(0.0, 1.0, 0.0));
-            self.bones[0].transform *
+            self.bones[Self::HULL_INDEX].transform *
             glm::mat4(new_x.x, 0.0, -self.turret_forward.x, 0.0,
                     new_x.y, 1.0, -self.turret_forward.y, 0.0,
                     new_x.z, 0.0, -self.turret_forward.z, 0.0,

@@ -18,5 +18,6 @@ pub enum Command {
     StopMoving,
     Fire,
     TogglePauseMenu,
-    StartPlaying
+    StartPlaying,
+    ReturnToMainMenu
 }

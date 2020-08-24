@@ -278,9 +278,9 @@ fn main() {
 	};
 
 	//Array of all tanks
-	let mut tanks = OptionVec::new();
+	let mut tanks: OptionVec<Tank> = OptionVec::new();
 
-	//Load the tank
+	//Load the tank skeleton
 	let mut turret_origin = glm::zero();
 	let tank_skeleton = match routines::load_ozymesh("models/better_tank.ozy") {
 		Some(meshdata) => {
@@ -343,20 +343,7 @@ fn main() {
 			panic!("Unable to load model.");
 		}
 	};
-	
-	//Initialize the player's tank
-	let player_tank_id = {
-		let tank_forward = glm::vec3(-1.0, 0.0, 0.0);
-		let tank_position = glm::vec3(-4.5, 0.0, 0.0);
-		let tank = Tank::new(tank_position, tank_forward, &tank_skeleton, Brain::PlayerInput);
-		tanks.insert(tank)
-	};
-
-	//Add an enemy tank
-	let tank_forward = glm::vec3(1.0, 0.0, 0.0);
-	let tank_position = glm::vec3(4.5, 0.0, 0.0);
-	let tank = Tank::new(tank_position, tank_forward, &tank_skeleton, Brain::DumbAI);
-	tanks.insert(tank);
+	let mut player_tank_id = 0;
 
 	//OptionVec of all fired tank shells
 	let mut shells: OptionVec<Shell> = OptionVec::new();
@@ -511,11 +498,12 @@ fn main() {
 	let mut last_ui_button_count = 0;
 	let mut ui_vao = None;
 	let mut button_color_instanced_buffer = 0;
+	let mut button_vao_flag = false;
 
 	//Pause menu data
 	let mut pause_menu = Menu::new(
 		vec!["Resume", "Settings", "Main Menu", "Exit"],
-		vec![Some(Command::TogglePauseMenu), None, None, Some(Command::Quit)],
+		vec![Some(Command::TogglePauseMenu), None, Some(Command::ReturnToMainMenu), Some(Command::Quit)],
 		UIAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
 	);
 
@@ -542,12 +530,14 @@ fn main() {
 		);
 		section
 	};
-	let title_section_index = sections.insert(title_section);
+	let mut title_section_index = sections.insert(title_section.clone());
 
-	//Default keybindings
+	//Initialize game state
 	let mut game_state = {
 		let mut input_maps = HashMap::new();
-		let mut key_bindings = {
+
+		//Default key bindings for now
+		let key_bindings = {
 			let mut map = HashMap::new();
 
 			map.insert((InputType::Key(Key::Escape), Action::Press), Command::TogglePauseMenu);
@@ -567,6 +557,16 @@ fn main() {
 			map
 		};
 		input_maps.insert(GameStateKind::Playing, key_bindings);
+
+		//Pause menu keybindings
+		let key_bindings = {
+			let mut map = HashMap::new();
+
+			map.insert((InputType::Key(Key::Escape), Action::Press), Command::TogglePauseMenu);	
+
+			map
+		};
+		input_maps.insert(GameStateKind::Paused, key_bindings);
 
 		GameState::new(GameStateKind::MainMenu, input_maps)
 	};
@@ -712,6 +712,31 @@ fn main() {
 					main_menu.hide(&mut ui_buttons, &mut sections);
 					sections.delete(title_section_index);
 					game_state.kind = GameStateKind::Playing;
+
+					//Initialize the player's tank
+					player_tank_id = {
+						let tank_forward = glm::vec3(-1.0, 0.0, 0.0);
+						let tank_position = glm::vec3(-4.5, 0.0, 0.0);
+						let tank = Tank::new(tank_position, tank_forward, &tank_skeleton, Brain::PlayerInput);
+						tanks.insert(tank)
+					};
+
+					//Add an enemy tank
+					let tank_forward = glm::vec3(1.0, 0.0, 0.0);
+					let tank_position = glm::vec3(4.5, 0.0, 0.0);
+					let tank = Tank::new(tank_position, tank_forward, &tank_skeleton, Brain::DumbAI);
+					tanks.insert(tank);
+				}
+				Command::ReturnToMainMenu => {
+					tanks.clear();
+					shells.clear();
+					ui_buttons.clear();
+					button_vao_flag = true;
+					sections.clear();
+					title_section_index = sections.insert(title_section.clone());
+					main_menu.show(&mut ui_buttons, &mut sections, &mut glyph_brush);
+					image_effect = ImageEffect::None;
+					game_state.kind = GameStateKind::MainMenu;
 				}
 			}
 		}
@@ -940,7 +965,8 @@ fn main() {
 		}
 
 		//Create vao for the ui buttons
-		if ui_buttons.count() > 0 && ui_buttons.count() != last_ui_button_count {
+		if ui_buttons.count() > 0 && (ui_buttons.count() != last_ui_button_count || button_vao_flag) {
+			button_vao_flag = false;
 			unsafe { 
 				let floats_per_button = 4 * 2;
 				let mut vertices = vec![0.0; ui_buttons.count() * floats_per_button];
