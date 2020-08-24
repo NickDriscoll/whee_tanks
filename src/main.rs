@@ -663,7 +663,7 @@ fn main() {
 				}
 				Command::MoveForwards => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.move_state = TankMoving::Forwards;
+						tank.moving += Tank::SPEED;
 					}
 				}
 				Command::MoveBackwards => {
@@ -755,15 +755,7 @@ fn main() {
 				for j in 0..tanks.len() {
 					if let Some(tank) = tanks.get_mut_element(j) {
 						//Update the tank's position
-						match tank.move_state {
-							TankMoving::Forwards => {
-								tank.position += tank.forward * -tank.speed * delta_time;
-							}
-							TankMoving::Backwards => {
-								tank.position += tank.forward * tank.speed * delta_time;
-							}
-							TankMoving::Not => {}
-						}
+						tank.position += tank.moving * delta_time;
 
 						//Update the tank's forward vector
 						tank.forward = glm::vec4_to_vec3(&(glm::rotation(tank.rotating * delta_time, &glm::vec3(0.0, 1.0, 0.0)) * glm::vec3_to_vec4(&tank.forward)));
