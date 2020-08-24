@@ -75,7 +75,6 @@ pub struct Tank<'a> {
     pub last_shot_time: f32,
     pub firing: bool,
     pub forward: glm::TVec3<f32>,
-    pub moving: glm::TVec3<f32>,
     pub rotating: f32,
     pub rotation: glm::TMat4<f32>,
     pub turret_forward: glm::TVec4<f32>,
@@ -86,7 +85,7 @@ pub struct Tank<'a> {
 }
 
 impl<'a> Tank<'a> {
-    const SPEED: f32 = 2.0;
+    pub const SPEED: f32 = 2.0;
     const HULL_INDEX: usize = 0;
     const TURRET_INDEX: usize = 1;
     pub const SHOT_COOLDOWN: f32 = 1.5;
@@ -94,11 +93,10 @@ impl<'a> Tank<'a> {
     pub fn new(position: glm::TVec3<f32>, forward: glm::TVec3<f32>, skeleton: &'a Skeleton, brain: Brain) -> Self {        
         Tank {
             position,
-            speed: Self::SPEED,
+            speed: 0.0,
             last_shot_time: 0.0,
             firing: false,
             forward,
-            moving: glm::zero(),
             rotating: 0.0,
             rotation: glm::identity(),
             turret_forward: glm::vec4(1.0, 0.0, 0.0, 0.0),

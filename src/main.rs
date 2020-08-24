@@ -549,8 +549,8 @@ fn main() {
 			map.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
 
 			//The keys here depend on the earlier bindings
-			map.insert((InputType::Key(Key::W), Action::Release), Command::StopMoving);
-			map.insert((InputType::Key(Key::S), Action::Release), Command::StopMoving);
+			map.insert((InputType::Key(Key::W), Action::Release), Command::StopMoveForwards);
+			map.insert((InputType::Key(Key::S), Action::Release), Command::StopMoveBackwards);
 			map.insert((InputType::Key(Key::A), Action::Release), Command::StopRotateLeft);
 			map.insert((InputType::Key(Key::D), Action::Release), Command::StopRotateRight);		
 
@@ -663,12 +663,12 @@ fn main() {
 				}
 				Command::MoveForwards => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.moving += Tank::SPEED;
+						tank.speed -= Tank::SPEED;
 					}
 				}
 				Command::MoveBackwards => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.move_state = TankMoving::Backwards;
+						tank.speed += Tank::SPEED;
 					}
 				}
 				Command::RotateLeft => {
@@ -681,9 +681,14 @@ fn main() {
 						tank.rotating += glm::half_pi::<f32>();
 					}
 				}
-				Command::StopMoving => {
+				Command::StopMoveForwards => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.move_state = TankMoving::Not;
+						tank.speed += Tank::SPEED;
+					}
+				}
+				Command::StopMoveBackwards => {
+					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
+						tank.speed -= Tank::SPEED;
 					}
 				}
 				Command::StopRotateLeft => {
@@ -754,11 +759,11 @@ fn main() {
 				//Update the tanks				
 				for j in 0..tanks.len() {
 					if let Some(tank) = tanks.get_mut_element(j) {
-						//Update the tank's position
-						tank.position += tank.moving * delta_time;
-
 						//Update the tank's forward vector
 						tank.forward = glm::vec4_to_vec3(&(glm::rotation(tank.rotating * delta_time, &glm::vec3(0.0, 1.0, 0.0)) * glm::vec3_to_vec4(&tank.forward)));
+
+						//Update the tank's position
+						tank.position += tank.forward * tank.speed * delta_time;
 
 						tank.rotation = {
 							let new_x = -glm::cross(&tank.forward, &glm::vec3(0.0, 1.0, 0.0));
