@@ -28,23 +28,17 @@ impl UIButton {
 }
 
 pub struct Menu<'a> {
-    labels: Vec<&'a str>,
-    commands: Vec<Option<Command>>,
+    buttons: Vec<(&'a str, Option<Command>)>,
     anchor: UIAnchor,
     active: bool,
     ids: Vec<usize>
 }
 
 impl<'a> Menu<'a> {
-    pub fn new(labels: Vec<&'a str>, commands: Vec<Option<Command>>, anchor: UIAnchor) -> Self {
-        if labels.len() != commands.len() {
-            panic!("Tried to create menu with non-matching labels and commands sizes");
-        }
-
-        let size = labels.len();
+    pub fn new(buttons: Vec<(&'a str, Option<Command>)>, anchor: UIAnchor) -> Self {
+        let size = buttons.len();
         Menu {
-            labels,
-            commands,
+            buttons,
             anchor,
             active: false,
             ids: vec![0; size]
@@ -57,10 +51,10 @@ impl<'a> Menu<'a> {
 		const BORDER_WIDTH: f32 = 15.0;
 		const BUFFER_DISTANCE: f32 = 10.0;
 		let font_size = 36.0;
-		for i in 0..self.labels.len() {
+		for i in 0..self.buttons.len() {
 			let mut section = {
 				let section = Section::new();
-				let mut text = Text::new(self.labels[i]).with_color([1.0, 1.0, 1.0, 1.0]);
+				let mut text = Text::new(self.buttons[i].0).with_color([1.0, 1.0, 1.0, 1.0]);
 				text.scale = PxScale::from(font_size);
 				section.add_text(text)
 			};
@@ -68,19 +62,6 @@ impl<'a> Menu<'a> {
 				Some(rect) => { rect }
 				None => { continue; }
 			};
-
-            section.screen_position = match self.anchor {
-                UIAnchor::LeftAligned(x, y) => {
-                    let x_pos = x;
-                    let y_pos = y + i as f32 * (bounding_box.height() + BUFFER_DISTANCE);
-                    (0.0, 0.0)
-                }
-                UIAnchor::CenterAligned(x, y) => {
-                    let x_pos = x - bounding_box.width() / 2.0;
-                    let y_pos = y + i as f32 * (bounding_box.height() + BUFFER_DISTANCE);
-                    (0.0, 0.0)
-                }
-            };
 
 			//Create the associated UI button
 			let width = bounding_box.width() + BORDER_WIDTH * 2.0;
@@ -113,7 +94,7 @@ impl<'a> Menu<'a> {
 		    //Finally insert the section into the array
 		    let section_id = sections.insert(section);
 
-    		let button = UIButton::new(section_id, button_bounds, self.commands[i]);
+    		let button = UIButton::new(section_id, button_bounds, self.buttons[i].1);
     		self.ids[i] = ui_buttons.insert(button);
         }
         self.active = true;

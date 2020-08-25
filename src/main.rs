@@ -502,15 +502,23 @@ fn main() {
 
 	//Pause menu data
 	let mut pause_menu = Menu::new(
-		vec!["Resume", "Settings", "Main Menu", "Exit"],
-		vec![Some(Command::TogglePauseMenu), None, Some(Command::ReturnToMainMenu), Some(Command::Quit)],
+		vec![
+			("Resume", Some(Command::TogglePauseMenu)),
+			("Settings", None),
+			("Main Menu", Some(Command::ReturnToMainMenu)),
+			("Exit", Some(Command::Quit)),
+		],
 		UIAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
 	);
 
 	//Main Menu data
 	let mut main_menu = Menu::new(
-		vec!["Singleplayer", "Multiplayer", "Settings", "Exit"],
-		vec![Some(Command::StartPlaying), None, None, Some(Command::Quit)],
+		vec![
+			("Singleplayer", Some(Command::StartPlaying)),
+			("Multiplayer", None),
+			("Settings", None),
+			("Exit", Some(Command::Quit)),
+		],
 		UIAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
 	);
 	main_menu.toggle(&mut ui_buttons, &mut sections, &mut glyph_brush);
