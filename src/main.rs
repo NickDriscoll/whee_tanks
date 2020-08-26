@@ -10,7 +10,7 @@ use ozy_engine::{glutil, routines};
 use ozy_engine::structs::OptionVec;
 use crate::structs::*;
 use crate::input::{Command, Input, InputKind};
-use crate::ui::{ButtonState, Menu, UIAnchor, UIButton};
+use crate::ui::{ButtonState, Menu, UIAnchor, UIButton, UIState};
 
 mod structs;
 mod input;
@@ -496,15 +496,13 @@ fn main() {
 		0.0, 0.0, 0.0, 1.0
 	);
 
-	//Array of text sections
-	let mut sections = OptionVec::new();
-
 	//Array of UI buttons
-	let mut ui_buttons: OptionVec<UIButton> = OptionVec::new();
 	let mut last_ui_button_count = 0;
 	let mut ui_vao = None;
-	let mut button_color_instanced_buffer = 0;
+	//let mut button_color_instanced_buffer = 0;
 	let mut button_vao_flag = false;
+
+	let mut ui_state = UIState::new(&mut glyph_brush);
 
 	//Pause menu data
 	let mut pause_menu = Menu::new(
@@ -527,7 +525,7 @@ fn main() {
 		],
 		UIAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
 	);
-	main_menu.toggle(&mut ui_buttons, &mut sections, &mut glyph_brush);
+	main_menu.toggle(&mut ui_state);
 
 	//Title text
 	let title_section = {
@@ -537,14 +535,14 @@ fn main() {
 		text.scale = PxScale::from(font_size);
 		let mut section = section.add_text(text);
 	
-		let bounding_box = glyph_brush.glyph_bounds(&section).unwrap();
+		let bounding_box = ui_state.glyph_brush.glyph_bounds(&section).unwrap();
 		section.screen_position = (
 			window_size.0 as f32 / 2.0 - bounding_box.width() / 2.0,
 			40.0
 		);
 		section
 	};
-	let mut title_section_index = sections.insert(title_section.clone());
+	let mut title_section_index = ui_state.sections.insert(title_section.clone());
 
 	//Initialize game state
 	let mut game_state = {
@@ -586,7 +584,6 @@ fn main() {
 	};
 
 	//Variable that determines what the update step looks like
-	//let mut game_state = GameStateKind::MainMenu;
 	let mut image_effect = ImageEffect::None;
 
 	//Main loop
@@ -625,42 +622,7 @@ fn main() {
 		}
 		
 		//Handle input from the UI buttons
-		let mut current_button = 0;
-		for i in 0..ui_buttons.len() {
-			if let Some(button) = ui_buttons.get_mut_element(i) {
-				if screen_space_mouse.x > button.bounds.min[0] &&
-				   screen_space_mouse.x < button.bounds.max[0] &&
-				   screen_space_mouse.y > button.bounds.min[1] &&
-				   screen_space_mouse.y < button.bounds.max[1] {
-
-					if last_mouse_lbutton_pressed && !mouse_lbutton_pressed {
-						if let Some(command) = button.command {
-							command_buffer.push(command);
-						}
-					}
-
-					//Handle updating button graphics
-					if button.state == ButtonState::None || (mouse_lbutton_pressed == last_mouse_lbutton_pressed) {
-						let color = if mouse_lbutton_pressed {
-							[0.0, 0.8, 0.0, 0.5]
-						} else {
-							[0.0, 0.4, 0.0, 0.5]
-						};
-						unsafe { update_ui_button_color_buffer(button_color_instanced_buffer, current_button, color); }
-
-						button.state = ButtonState::Highlighted;
-					}
-				} else {
-					if button.state != ButtonState::None {
-						let color = [0.0, 0.0, 0.0, 0.5];
-						unsafe { update_ui_button_color_buffer(button_color_instanced_buffer, current_button, color); }
-
-						button.state = ButtonState::None;
-					}
-				}				
-				current_button += 1;
-			}
-		}
+		ui_state.button_update(screen_space_mouse, mouse_lbutton_pressed, last_mouse_lbutton_pressed, &mut command_buffer);
 		
 		//Process the generated commands
 		for command in command_buffer.drain(0..command_buffer.len()) {
@@ -724,8 +686,8 @@ fn main() {
 					}
 				}
 				Command::StartPlaying => {
-					main_menu.hide(&mut ui_buttons, &mut sections);
-					sections.delete(title_section_index);
+					main_menu.hide(&mut ui_state);
+					ui_state.sections.delete(title_section_index);
 					game_state.kind = GameStateKind::Playing;
 
 					//Initialize the player's tank
@@ -745,12 +707,12 @@ fn main() {
 				Command::ReturnToMainMenu => {
 					tanks.clear();
 					shells.clear();
-					ui_buttons.clear();
-					pause_menu.hide(&mut ui_buttons, &mut sections);
+					ui_state.buttons.clear();
+					pause_menu.hide(&mut ui_state);
 					button_vao_flag = true;
-					sections.clear();
-					title_section_index = sections.insert(title_section.clone());
-					main_menu.show(&mut ui_buttons, &mut sections, &mut glyph_brush);
+					ui_state.sections.clear();
+					title_section_index = ui_state.sections.insert(title_section.clone());
+					main_menu.show(&mut ui_state);
 					image_effect = ImageEffect::None;
 					game_state.kind = GameStateKind::MainMenu;
 				}
@@ -873,14 +835,14 @@ fn main() {
 			}
 			GameStateKind::Pausing => {
 				//Enable the pause menu
-				pause_menu.show(&mut ui_buttons, &mut sections, &mut glyph_brush);
+				pause_menu.show(&mut ui_state);
 
 				game_state.kind = GameStateKind::Paused;
 				image_effect = ImageEffect::Blur;
 			}
 			GameStateKind::Resuming => {
 				//Remove the pause menu from the ui button list
-				pause_menu.hide(&mut ui_buttons, &mut sections);
+				pause_menu.hide(&mut ui_state);
 
 				game_state.kind = GameStateKind::Playing;
 				image_effect = ImageEffect::None;
@@ -893,14 +855,14 @@ fn main() {
 		//-----------Constructing UI elements for rendering-----------
 
 		//Queue glyph_brush sections
-		for sec in sections.iter() {
+		for sec in ui_state.sections.iter() {
 			if let Some(s) = sec {
-				glyph_brush.queue(s);
+				ui_state.glyph_brush.queue(s);
 			}			
 		}
 
 		//glyph_brush processing
-		let mut glyph_result = glyph_brush.process_queued(|rect, tex_data| unsafe {
+		let mut glyph_result = ui_state.glyph_brush.process_queued(|rect, tex_data| unsafe {
 			gl::TextureSubImage2D(
 				glyph_texture,
 				0,
@@ -921,8 +883,8 @@ fn main() {
 				gl::BindTexture(gl::TEXTURE_2D, glyph_texture);
 				gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RED as GLint, width as GLint, height as GLint, 0, gl::RED, gl::UNSIGNED_BYTE, ptr::null());
 			}
-			glyph_brush.resize_texture(width, height);
-			glyph_result = glyph_brush.process_queued(|rect, tex_data| unsafe {
+			ui_state.glyph_brush.resize_texture(width, height);
+			glyph_result = ui_state.glyph_brush.process_queued(|rect, tex_data| unsafe {
 				gl::TextureSubImage2D(
 					glyph_texture,
 					0,
@@ -973,16 +935,16 @@ fn main() {
 		}
 
 		//Create vao for the ui buttons
-		if ui_buttons.count() > 0 && (ui_buttons.count() != last_ui_button_count || button_vao_flag) {
+		if ui_state.buttons.count() > 0 && (ui_state.buttons.count() != last_ui_button_count || button_vao_flag) {
 			button_vao_flag = false;
 			unsafe { 
 				let floats_per_button = 4 * 2;
-				let mut vertices = vec![0.0; ui_buttons.count() * floats_per_button];
-				let mut indices = vec![0u16; ui_buttons.count() * 6];
+				let mut vertices = vec![0.0; ui_state.buttons.count() * floats_per_button];
+				let mut indices = vec![0u16; ui_state.buttons.count() * 6];
 
 				let mut quads_added = 0;
-				for i in 0..ui_buttons.len() {
-					if let Some(button) = &ui_buttons[i] {
+				for i in 0..ui_state.buttons.len() {
+					if let Some(button) = &ui_state.buttons[i] {
 						vertices[quads_added * floats_per_button] = button.bounds.min[0];
 						vertices[quads_added * floats_per_button + 1] = button.bounds.min[1];
 						vertices[quads_added * floats_per_button + 2] = button.bounds.min[0];
@@ -1012,8 +974,8 @@ fn main() {
 				}
 
 				//Create GPU buffer for ui button colors
-				button_color_instanced_buffer = {
-					let element_count = ui_buttons.count() * COLORS_PER_BUTTON * FLOATS_PER_COLOR;
+				ui_state.button_color_buffer = {
+					let element_count = ui_state.buttons.count() * COLORS_PER_BUTTON * FLOATS_PER_COLOR;
 
 					let mut data = vec![0.0f32; element_count];
 					for i in 0..(data.len() / FLOATS_PER_COLOR) {
@@ -1040,13 +1002,13 @@ fn main() {
 					b
 				};
 			}
-		} else if ui_buttons.count() == 0 {
+		} else if ui_state.buttons.count() == 0 {
 			if let Some(mut vao) = ui_vao {
 				unsafe { gl::DeleteVertexArrays(1, &mut vao); }
 				ui_vao = None;
 			}
 		}
-		last_ui_button_count = ui_buttons.count();
+		last_ui_button_count = ui_state.buttons.count();
 
 
 		//Rendering
@@ -1195,7 +1157,7 @@ fn main() {
 
 			//Render UI buttons
 			if let Some(vao) = ui_vao {
-				draw_ui_elements(vao, ui_shader, ui_buttons.count(), &clipping_from_screen);
+				draw_ui_elements(vao, ui_shader, ui_state.buttons.count(), &clipping_from_screen);
 			}
 
 			//Render text

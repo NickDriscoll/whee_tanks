@@ -8,16 +8,19 @@ use std::mem;
 type GlyphBrushVertexType = [f32; 16];
 
 pub struct UIState<'a> {
-    glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>,
+    pub glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>,
     pub button_color_buffer: GLuint,
     pub buttons: OptionVec<UIButton>,
     pub sections: OptionVec<Section<'a>>,
 }
 impl<'a> UIState<'a> {
-    pub fn new(glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>, button_color_buffer: GLuint) -> Self {
+    const FLOATS_PER_COLOR: usize = 4;
+    const COLORS_PER_BUTTON: usize = 4;
+
+    pub fn new(glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>) -> Self {
         UIState {
             glyph_brush,
-            button_color_buffer,
+            button_color_buffer: 0,
             buttons: OptionVec::new(),
             sections: OptionVec::new()
         }
@@ -48,14 +51,14 @@ impl<'a> UIState<'a> {
 						} else {
 							[0.0, 0.4, 0.0, 0.5]
 						};
-						//unsafe { self.update_ui_button_color(current_button, color); }
+						unsafe { Self::update_ui_button_color(self.button_color_buffer, current_button, color); }
 
 						button.state = ButtonState::Highlighted;
 					}
 				} else {
 					if button.state != ButtonState::None {
 						let color = [0.0, 0.0, 0.0, 0.5];
-						//unsafe { self.update_ui_button_color(current_button, color); }
+						unsafe { Self::update_ui_button_color(self.button_color_buffer, current_button, color); }
 
 						button.state = ButtonState::None;
 					}
@@ -64,11 +67,8 @@ impl<'a> UIState<'a> {
 			}
 		}
     }
-
-    const FLOATS_PER_COLOR: usize = 4;
-    const COLORS_PER_BUTTON: usize = 4;
     //Change the color of button at index to color
-    unsafe fn update_ui_button_color(&self, index: usize, color: [f32; 4]) { //When color's size is Self::FLOATS_PER_COLOR it causes a compiler bug
+    unsafe fn update_ui_button_color(buffer: GLuint, index: usize, color: [f32; 4]) { //When color's size is Self::FLOATS_PER_COLOR it causes a compiler bug
         let mut data = vec![0.0; Self::FLOATS_PER_COLOR * Self::COLORS_PER_BUTTON];
         
         for i in 0..(data.len() / Self::FLOATS_PER_COLOR) {
@@ -77,7 +77,7 @@ impl<'a> UIState<'a> {
             data[i * Self::FLOATS_PER_COLOR + 2] = color[2];
             data[i * Self::FLOATS_PER_COLOR + 3] = color[3];
         }
-        gl::BindBuffer(gl::ARRAY_BUFFER, self.button_color_buffer);
+        gl::BindBuffer(gl::ARRAY_BUFFER, buffer);
         gl::BufferSubData(gl::ARRAY_BUFFER,
                         (Self::COLORS_PER_BUTTON * Self::FLOATS_PER_COLOR * index * mem::size_of::<GLfloat>()) as GLintptr,
                         (Self::FLOATS_PER_COLOR * Self::COLORS_PER_BUTTON * mem::size_of::<GLfloat>()) as GLsizeiptr,
@@ -127,7 +127,7 @@ impl<'a> Menu<'a> {
     }
 
     //Adds this menu's data to the arrays of buttons and sections
-    pub fn show<'b>(&mut self, ui_buttons: &mut OptionVec<UIButton>, sections: &mut OptionVec<Section<'a>>, glyph_brush: &mut GlyphBrush<GlyphBrushVertexType>) {
+    pub fn show<'b>(&mut self, ui_state: &mut UIState<'a>) {
         if self.active { return; }
 
         //Submit the pause menu data
@@ -141,7 +141,7 @@ impl<'a> Menu<'a> {
 				text.scale = PxScale::from(font_size);
 				section.add_text(text)
 			};
-			let bounding_box = match glyph_brush.glyph_bounds(&section) {
+			let bounding_box = match ui_state.glyph_brush.glyph_bounds(&section) {
 				Some(rect) => { rect }
 				None => { continue; }
 			};
@@ -175,31 +175,31 @@ impl<'a> Menu<'a> {
 		    );
 
 		    //Finally insert the section into the array
-		    let section_id = sections.insert(section);
+		    let section_id = ui_state.sections.insert(section);
 
     		let button = UIButton::new(section_id, button_bounds, self.buttons[i].1);
-    		self.ids[i] = ui_buttons.insert(button);
+    		self.ids[i] = ui_state.buttons.insert(button);
         }
         self.active = true;
     }
 
     //Remove this menu's data from the arrays of buttons and sections
-    pub fn hide(&mut self, ui_buttons: &mut OptionVec<UIButton>, sections: &mut OptionVec<Section<'a>>) {
+    pub fn hide(&mut self, ui_state: &mut UIState) {
         if !self.active { return; }
 		for id in self.ids.iter() {
-			if let Some(button) = &ui_buttons[*id] {
-                sections.delete(button.section_id());
-                ui_buttons.delete(*id);
+			if let Some(button) = &ui_state.buttons[*id] {
+                ui_state.sections.delete(button.section_id());
+                ui_state.buttons.delete(*id);
 			}
         }
         self.active = false;
     }
 
-    pub fn toggle<'b>(&mut self, ui_buttons: &mut OptionVec<UIButton>, sections: &mut OptionVec<Section<'a>>, glyph_brush: &mut GlyphBrush<GlyphBrushVertexType>) {
+    pub fn toggle<'b>(&mut self, ui_state: &mut UIState<'a>) {
         if self.active {
-            self.hide(ui_buttons, sections);
+            self.hide(ui_state);
         } else {
-            self.show(ui_buttons, sections, glyph_brush);
+            self.show(ui_state);
         }
     }
 }
