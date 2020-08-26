@@ -746,6 +746,7 @@ fn main() {
 					tanks.clear();
 					shells.clear();
 					ui_buttons.clear();
+					pause_menu.hide(&mut ui_buttons, &mut sections);
 					button_vao_flag = true;
 					sections.clear();
 					title_section_index = sections.insert(title_section.clone());

@@ -1,8 +1,89 @@
 use crate::input::{Command};
 use ozy_engine::structs::{OptionVec};
 use glyph_brush::{GlyphBrush, GlyphCruncher, ab_glyph::PxScale, Section, Text};
+use gl::types::*;
+use std::os::raw::c_void;
+use std::mem;
 
 type GlyphBrushVertexType = [f32; 16];
+
+pub struct UIState<'a> {
+    glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>,
+    pub button_color_buffer: GLuint,
+    pub buttons: OptionVec<UIButton>,
+    pub sections: OptionVec<Section<'a>>,
+}
+impl<'a> UIState<'a> {
+    pub fn new(glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>, button_color_buffer: GLuint) -> Self {
+        UIState {
+            glyph_brush,
+            button_color_buffer,
+            buttons: OptionVec::new(),
+            sections: OptionVec::new()
+        }
+    }
+
+    //Gets input from the UI system and generates Commands for the command buffer I.E. user clicking on buttons
+    //Also updates the instanced color buffer used for rendering the buttons
+    pub fn button_update(&mut self, screen_space_mouse: glm::TVec2<f32>, mouse_lbutton_pressed: bool, mouse_lbutton_pressed_last_frame: bool, command_buffer: &mut Vec<Command>) {        
+		//Handle input from the UI buttons
+		let mut current_button = 0;
+		for i in 0..self.buttons.len() {
+			if let Some(button) = self.buttons.get_mut_element(i) {
+				if screen_space_mouse.x > button.bounds.min[0] &&
+				   screen_space_mouse.x < button.bounds.max[0] &&
+				   screen_space_mouse.y > button.bounds.min[1] &&
+				   screen_space_mouse.y < button.bounds.max[1] {
+
+					if mouse_lbutton_pressed_last_frame && !mouse_lbutton_pressed {
+						if let Some(command) = button.command {
+							command_buffer.push(command);
+						}
+					}
+
+					//Handle updating button graphics
+					if button.state == ButtonState::None || (mouse_lbutton_pressed == mouse_lbutton_pressed_last_frame) {
+						let color = if mouse_lbutton_pressed {
+							[0.0, 0.8, 0.0, 0.5]
+						} else {
+							[0.0, 0.4, 0.0, 0.5]
+						};
+						//unsafe { self.update_ui_button_color(current_button, color); }
+
+						button.state = ButtonState::Highlighted;
+					}
+				} else {
+					if button.state != ButtonState::None {
+						let color = [0.0, 0.0, 0.0, 0.5];
+						//unsafe { self.update_ui_button_color(current_button, color); }
+
+						button.state = ButtonState::None;
+					}
+				}				
+				current_button += 1;
+			}
+		}
+    }
+
+    const FLOATS_PER_COLOR: usize = 4;
+    const COLORS_PER_BUTTON: usize = 4;
+    //Change the color of button at index to color
+    unsafe fn update_ui_button_color(&self, index: usize, color: [f32; 4]) { //When color's size is Self::FLOATS_PER_COLOR it causes a compiler bug
+        let mut data = vec![0.0; Self::FLOATS_PER_COLOR * Self::COLORS_PER_BUTTON];
+        
+        for i in 0..(data.len() / Self::FLOATS_PER_COLOR) {
+            data[i * Self::FLOATS_PER_COLOR] = color[0];
+            data[i * Self::FLOATS_PER_COLOR + 1] = color[1];
+            data[i * Self::FLOATS_PER_COLOR + 2] = color[2];
+            data[i * Self::FLOATS_PER_COLOR + 3] = color[3];
+        }
+        gl::BindBuffer(gl::ARRAY_BUFFER, self.button_color_buffer);
+        gl::BufferSubData(gl::ARRAY_BUFFER,
+                        (Self::COLORS_PER_BUTTON * Self::FLOATS_PER_COLOR * index * mem::size_of::<GLfloat>()) as GLintptr,
+                        (Self::FLOATS_PER_COLOR * Self::COLORS_PER_BUTTON * mem::size_of::<GLfloat>()) as GLsizeiptr,
+                        &data[0] as *const GLfloat as *const c_void);
+    }
+}
 
 #[derive(Debug)]
 pub struct UIButton {
@@ -46,7 +127,9 @@ impl<'a> Menu<'a> {
     }
 
     //Adds this menu's data to the arrays of buttons and sections
-    pub fn show<'b>(&mut self, ui_buttons: &mut OptionVec<UIButton>, sections: &'b mut OptionVec<Section<'a>>, glyph_brush: &mut GlyphBrush<GlyphBrushVertexType>) {
+    pub fn show<'b>(&mut self, ui_buttons: &mut OptionVec<UIButton>, sections: &mut OptionVec<Section<'a>>, glyph_brush: &mut GlyphBrush<GlyphBrushVertexType>) {
+        if self.active { return; }
+
         //Submit the pause menu data
 		const BORDER_WIDTH: f32 = 15.0;
 		const BUFFER_DISTANCE: f32 = 10.0;
@@ -101,7 +184,8 @@ impl<'a> Menu<'a> {
     }
 
     //Remove this menu's data from the arrays of buttons and sections
-    pub fn hide(&mut self, ui_buttons: &mut OptionVec<UIButton>, sections: &mut OptionVec<Section>) {
+    pub fn hide(&mut self, ui_buttons: &mut OptionVec<UIButton>, sections: &mut OptionVec<Section<'a>>) {
+        if !self.active { return; }
 		for id in self.ids.iter() {
 			if let Some(button) = &ui_buttons[*id] {
                 sections.delete(button.section_id());
@@ -111,7 +195,7 @@ impl<'a> Menu<'a> {
         self.active = false;
     }
 
-    pub fn toggle<'b>(&mut self, ui_buttons: &mut OptionVec<UIButton>, sections: &'b mut OptionVec<Section<'a>>, glyph_brush: &mut GlyphBrush<GlyphBrushVertexType>) {
+    pub fn toggle<'b>(&mut self, ui_buttons: &mut OptionVec<UIButton>, sections: &mut OptionVec<Section<'a>>, glyph_brush: &mut GlyphBrush<GlyphBrushVertexType>) {
         if self.active {
             self.hide(ui_buttons, sections);
         } else {
@@ -120,6 +204,7 @@ impl<'a> Menu<'a> {
     }
 }
 
+//Defines the anchor point of the UI element and how that anchor is configured
 pub enum UIAnchor {
     LeftAligned(f32, f32),
     CenterAligned(f32, f32)
