@@ -1,5 +1,7 @@
+pub type Input = (InputKind, glfw::Action);
+
 #[derive(PartialEq, Eq, Hash, Clone)]
-pub enum InputType {
+pub enum InputKind {
     Key(glfw::Key),
     Mouse(glfw::MouseButton)
 }
