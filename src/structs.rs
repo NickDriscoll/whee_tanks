@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::ptr;
 use ozy_engine::{glutil, routines};
 use crate::DEFAULT_TEX_PARAMS;
-use crate::input::{Command, InputType};
+use crate::input::{Command, InputKind};
 
 pub struct StaticGeometry {
     pub vao: GLuint,
@@ -269,12 +269,6 @@ impl RenderTarget {
     }
 }
 
-pub enum TankMoving {
-    Forwards,
-    Backwards,
-    Not
-}
-
 //Determines what to do during the update step for a given entity
 pub enum Brain {
     PlayerInput,
@@ -283,18 +277,18 @@ pub enum Brain {
 
 pub struct GameState {
     pub kind: GameStateKind,
-    input_maps: HashMap<GameStateKind, HashMap<(InputType, glfw::Action), Command>>
+    input_maps: HashMap<GameStateKind, HashMap<(InputKind, glfw::Action), Command>>
 }
 
 impl GameState {
-    pub fn new(kind: GameStateKind, input_maps: HashMap<GameStateKind, HashMap<(InputType, glfw::Action), Command>>) -> Self {
+    pub fn new(kind: GameStateKind, input_maps: HashMap<GameStateKind, HashMap<(InputKind, glfw::Action), Command>>) -> Self {
         GameState {
             kind,
             input_maps
         }
     }
 
-    pub fn get_input_map(&self) -> HashMap<(InputType, glfw::Action), Command> {
+    pub fn get_input_map(&self) -> HashMap<(InputKind, glfw::Action), Command> {
         match self.input_maps.get(&self.kind) {
             Some(map) => { map.clone() }
             None => { HashMap::new() }
