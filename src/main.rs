@@ -9,7 +9,7 @@ use glyph_brush::{ab_glyph::{FontArc, PxScale}, BrushAction, BrushError, GlyphBr
 use ozy_engine::{glutil, routines};
 use ozy_engine::structs::OptionVec;
 use crate::structs::*;
-use crate::input::{Command, InputType};
+use crate::input::{Command, Input, InputKind};
 use crate::ui::{ButtonState, Menu, UIAnchor, UIButton};
 
 mod structs;
@@ -144,6 +144,12 @@ pub unsafe fn draw_ui_elements(vao: GLuint, shader: GLuint, count: usize, clippi
 	glutil::bind_matrix4(shader, "clipping_from_screen", &clipping_from_screen);
 	gl::BindVertexArray(vao);
 	gl::DrawElements(gl::TRIANGLES, 6 * count as GLint, gl::UNSIGNED_SHORT, ptr::null());
+}
+
+pub fn submit_input_command(input: &Input, command_buffer: &mut Vec<Command>, bindings: &HashMap<Input, Command>) {	
+	if let Some(command) = bindings.get(input) {
+		command_buffer.push(*command);
+	}
 }
 
 fn main() {
@@ -548,19 +554,19 @@ fn main() {
 		let key_bindings = {
 			let mut map = HashMap::new();
 
-			map.insert((InputType::Key(Key::Escape), Action::Press), Command::TogglePauseMenu);
-			map.insert((InputType::Key(Key::Q), Action::Press), Command::ToggleWireframe);
-			map.insert((InputType::Key(Key::W), Action::Press), Command::MoveForwards);
-			map.insert((InputType::Key(Key::S), Action::Press), Command::MoveBackwards);
-			map.insert((InputType::Key(Key::A), Action::Press), Command::RotateLeft);
-			map.insert((InputType::Key(Key::D), Action::Press), Command::RotateRight);
-			map.insert((InputType::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
+			map.insert((InputKind::Key(Key::Escape), Action::Press), Command::TogglePauseMenu);
+			map.insert((InputKind::Key(Key::Q), Action::Press), Command::ToggleWireframe);
+			map.insert((InputKind::Key(Key::W), Action::Press), Command::MoveForwards);
+			map.insert((InputKind::Key(Key::S), Action::Press), Command::MoveBackwards);
+			map.insert((InputKind::Key(Key::A), Action::Press), Command::RotateLeft);
+			map.insert((InputKind::Key(Key::D), Action::Press), Command::RotateRight);
+			map.insert((InputKind::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
 
 			//The keys here depend on the earlier bindings
-			map.insert((InputType::Key(Key::W), Action::Release), Command::StopMoveForwards);
-			map.insert((InputType::Key(Key::S), Action::Release), Command::StopMoveBackwards);
-			map.insert((InputType::Key(Key::A), Action::Release), Command::StopRotateLeft);
-			map.insert((InputType::Key(Key::D), Action::Release), Command::StopRotateRight);		
+			map.insert((InputKind::Key(Key::W), Action::Release), Command::StopMoveForwards);
+			map.insert((InputKind::Key(Key::S), Action::Release), Command::StopMoveBackwards);
+			map.insert((InputKind::Key(Key::A), Action::Release), Command::StopRotateLeft);
+			map.insert((InputKind::Key(Key::D), Action::Release), Command::StopRotateRight);		
 
 			map
 		};
@@ -570,7 +576,7 @@ fn main() {
 		let key_bindings = {
 			let mut map = HashMap::new();
 
-			map.insert((InputType::Key(Key::Escape), Action::Press), Command::TogglePauseMenu);	
+			map.insert((InputKind::Key(Key::Escape), Action::Press), Command::TogglePauseMenu);	
 
 			map
 		};
@@ -596,19 +602,15 @@ fn main() {
 		};
 
 		//Handle window events
-		let key_bindings = game_state.get_input_map();
+		let key_bindings = game_state.get_input_map();				//Retrieve the input map to be used this frame based on the current gamestate
         for (_, event) in glfw::flush_messages(&events) {
             match event {
 				WindowEvent::Close => { window.set_should_close(true); }
 				WindowEvent::Key(key, _, action, ..) => {
-					if let Some(command) = key_bindings.get(&(InputType::Key(key), action)) {
-						command_buffer.push(*command);
-					}
+					submit_input_command(&(InputKind::Key(key), action), &mut command_buffer, &key_bindings);
 				}
 				WindowEvent::MouseButton(button, action, ..) => {
-					if let Some(command) = key_bindings.get(&(InputType::Mouse(button), action)) {
-						command_buffer.push(*command);
-					}
+					submit_input_command(&(InputKind::Mouse(button), action), &mut command_buffer, &key_bindings);
 
 					mouse_lbutton_pressed = action == Action::Press;
 				}
