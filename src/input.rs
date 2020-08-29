@@ -21,6 +21,7 @@ pub enum Command {
     StopMoveBackwards,
     Fire,
     TogglePauseMenu,
+    //ToggleFullScreen,
     StartPlaying,
     ReturnToMainMenu
 }

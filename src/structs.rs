@@ -148,7 +148,7 @@ impl TextureKeeper {
 
     pub unsafe fn fetch_texture(&mut self, name: &str, map_type: &str) -> GLuint {        
 		let texture_path = format!("textures/{}/{}.png", name, map_type);
-		let id = match self.map.get(&texture_path) {
+		match self.map.get(&texture_path) {
 			Some(t) => {
 				*t
 			}
@@ -157,8 +157,7 @@ impl TextureKeeper {
 				self.map.insert(texture_path, name);
 				name
 			}
-        };
-        id
+        }
     }
 }
 
