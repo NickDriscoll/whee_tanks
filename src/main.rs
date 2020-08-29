@@ -1,11 +1,14 @@
 extern crate nalgebra_glm as glm;
 use std::{mem, ptr};
 use std::collections::HashMap;
+use std::fs::{File};
+use std::io::BufReader;
 use std::os::raw::c_void;
 use std::time::Instant;
 use glfw::{Action, Context, Key, MouseButton, WindowEvent, WindowMode};
 use gl::types::*;
 use glyph_brush::{ab_glyph::{FontArc, PxScale}, BrushAction, BrushError, GlyphBrushBuilder, GlyphCruncher, GlyphVertex, Section, Text};
+use rodio::{Sink};
 use ozy_engine::{glutil, routines};
 use ozy_engine::structs::OptionVec;
 use crate::structs::*;
@@ -138,6 +141,8 @@ pub fn submit_input_command(input: &Input, command_buffer: &mut Vec<Command>, bi
 fn main() {
 	let mut window_size = (1920, 1080);
 	let mut aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
+	let game_title = "Whee! Tanks! for ipad";
+
 	//Init glfw
 	let mut glfw = match glfw::init(glfw::FAIL_ON_ERRORS) {
 		Ok(g) => { g }
@@ -149,7 +154,7 @@ fn main() {
 	glfw.window_hint(glfw::WindowHint::OpenGlDebugContext(true));
 
 	//Create window
-    let (mut window, events) = glfw.create_window(window_size.0, window_size.1, "Whee! Tanks! for ipad", WindowMode::Windowed).unwrap();
+    let (mut window, events) = glfw.create_window(window_size.0, window_size.1, game_title, WindowMode::Windowed).unwrap();
 
 	//Make the window non-resizable
 	window.set_resizable(false);
@@ -239,16 +244,17 @@ fn main() {
 	let mut arena_pieces = Vec::new();
 
 	//Define the floor plane
+	let arena_ratio = 16.0 / 9.0;
+	let scale = 2.0;
+	let floor_half_size = (4.5*arena_ratio*scale, 5.0*scale);
 	unsafe {
-		let arena_ratio = 16.0 / 9.0;
 		let tex_scale = 3.0;
-		let scale = 2.0;
 		let vertices = [
 			//Positions										Tangents					Bitangents				Normals							Texture coordinates
-			-4.5*arena_ratio*scale, 0.0, -5.0*scale,		1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					0.0, 0.0,
-			4.5*arena_ratio*scale, 0.0, -5.0*scale,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					tex_scale*arena_ratio*scale, 0.0,
-			-4.5*arena_ratio*scale, 0.0, 5.0*scale,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					0.0, tex_scale*scale,
-			4.5*arena_ratio*scale, 0.0, 5.0*scale,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					tex_scale*arena_ratio*scale, tex_scale*scale
+			-floor_half_size.0, 0.0, -floor_half_size.1,		1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					0.0, 0.0,
+			floor_half_size.0, 0.0, -floor_half_size.1,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					tex_scale*arena_ratio*scale, 0.0,
+			-floor_half_size.0, 0.0, floor_half_size.1,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					0.0, tex_scale*scale,
+			floor_half_size.0, 0.0, floor_half_size.1,			1.0, 0.0, 0.0,				0.0, 0.0, 1.0,			0.0, 1.0, 0.0,					tex_scale*arena_ratio*scale, tex_scale*scale
 		];
 		let indices = [
 			0u16, 1, 2,
@@ -341,13 +347,14 @@ fn main() {
 	let shell_mesh = SimpleMesh::from_ozy("models/better_shell.ozy", &mut texture_keeper);
 	
 	//Create GPU buffer for instanced matrices
+	let maximum_live_shells = 10000;
 	let shell_instanced_transforms = unsafe {
 		gl::BindVertexArray(shell_mesh.vao);
 
 		let mut b = 0;
 		gl::GenBuffers(1, &mut b);
 		gl::BindBuffer(gl::ARRAY_BUFFER, b);
-		gl::BufferData(gl::ARRAY_BUFFER, (10000 * 16 * mem::size_of::<GLfloat>()) as GLsizeiptr, ptr::null(), gl::DYNAMIC_DRAW);
+		gl::BufferData(gl::ARRAY_BUFFER, (maximum_live_shells * 16 * mem::size_of::<GLfloat>()) as GLsizeiptr, ptr::null(), gl::DYNAMIC_DRAW);
 
 		//Attach this buffer to the shell_mesh vao
 		//We have to individually bind each column of the matrix as a different vec4 vertex attribute
@@ -507,7 +514,15 @@ fn main() {
 		);
 		menus.push(menu);
 
-		//Setting menu data
+		let menu = Menu::new(
+			vec![
+				("Toggle collision volumes", None)
+			],
+			UIAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
+		);
+		menus.push(menu);
+
+		//Settings menu data
 		/*
 		let mut menu = Menu::new(
 			vec![
@@ -522,38 +537,14 @@ fn main() {
 	};
 	let main_menu_index = 0;
 	let pause_menu_index = 1;
+	let debug_menu_index = 2;
 	ui_state.show_menu(main_menu_index);
-
-	//Pause menu data
-	/*
-	let mut pause_menu = Menu::new(
-		vec![
-			("Resume", Some(Command::TogglePauseMenu)),
-			("Settings", None),
-			("Main Menu", Some(Command::ReturnToMainMenu)),
-			("Exit", Some(Command::Quit)),
-		],
-		UIAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
-	);
-
-	//Main Menu data
-	let mut main_menu = Menu::new(
-		vec![
-			("Singleplayer", Some(Command::StartPlaying)),
-			("Multiplayer", None),
-			("Settings", None),
-			("Exit", Some(Command::Quit)),
-		],
-		UIAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
-	);
-	main_menu.toggle(&mut ui_state);
-	*/
 
 	//Title text
 	let title_section = {
 		let font_size = 72.0;
 		let section = Section::new();
-		let mut text = Text::new("Whee! Tanks! for ipad").with_color([1.0, 1.0, 1.0, 1.0]);
+		let mut text = Text::new(game_title).with_color([1.0, 1.0, 1.0, 1.0]);
 		text.scale = PxScale::from(font_size);
 		let mut section = section.add_text(text);
 	
@@ -564,7 +555,18 @@ fn main() {
 		);
 		section
 	};
-	let mut title_section_index = ui_state.add_section(title_section.clone());
+	ui_state.add_section(title_section.clone());
+
+	//Background music data
+	let bgm_path = "music/factory.mp3";
+	let bgm_volume = 0.5;
+	let bgm_sink = match rodio::default_output_device() {
+		Some(device) => {
+			let sink = Sink::new(&device);
+			Some(sink)
+		}
+		None => { None }
+	};
 
 	//Initialize game state
 	let mut game_state = {
@@ -580,6 +582,7 @@ fn main() {
 			map.insert((InputKind::Key(Key::S), Action::Press), Command::MoveBackwards);
 			map.insert((InputKind::Key(Key::A), Action::Press), Command::RotateLeft);
 			map.insert((InputKind::Key(Key::D), Action::Press), Command::RotateRight);
+			map.insert((InputKind::Key(Key::GraveAccent), Action::Press), Command::ToggleMenu(debug_menu_index));
 			map.insert((InputKind::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
 
 			//The keys here depend on the earlier bindings
@@ -597,6 +600,7 @@ fn main() {
 			let mut map = HashMap::new();
 
 			map.insert((InputKind::Key(Key::Escape), Action::Press), Command::TogglePauseMenu);	
+			map.insert((InputKind::Key(Key::GraveAccent), Action::Press), Command::ToggleMenu(debug_menu_index));
 
 			map
 		};
@@ -649,12 +653,8 @@ fn main() {
 		//Process the generated commands
 		for command in command_buffer.drain(0..command_buffer.len()) {
 			match command {
-				Command::Quit => {
-					window.set_should_close(true);
-				}
-				Command::ToggleWireframe => {
-					is_wireframe = !is_wireframe;
-				}
+				Command::Quit => { window.set_should_close(true); }
+				Command::ToggleWireframe => { is_wireframe = !is_wireframe; }
 				Command::MoveForwards => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
 						tank.speed -= Tank::SPEED;
@@ -697,11 +697,30 @@ fn main() {
 				}
 				Command::TogglePauseMenu => {
 					match game_state.kind {
-						GameStateKind::Paused => { 
-							game_state.kind = GameStateKind::Resuming;
+						GameStateKind::Paused => {
+							//Hide UI
+							ui_state.reset();			
+							game_state.kind = GameStateKind::Playing;							
+							image_effect = ImageEffect::None;
+							if let Some(sink) = &bgm_sink {
+								sink.set_volume(bgm_volume);
+							}
 						}
-						GameStateKind::Playing => { 
-							game_state.kind = GameStateKind::Pausing;
+						GameStateKind::Playing => {
+							if let Some(tank) = tanks.get_mut_element(player_tank_id) {
+								tank.speed = 0.0;
+								tank.rotating = 0.0;
+							}
+							
+							//Enable the pause menu
+							ui_state.show_menu(pause_menu_index);
+							ui_state.add_section(title_section.clone());
+			
+							game_state.kind = GameStateKind::Paused;
+							image_effect = ImageEffect::Blur;
+							if let Some(sink) = &bgm_sink {
+								sink.set_volume(bgm_volume * 0.25);
+							}
 						}
 						_ => {}
 					}
@@ -714,6 +733,8 @@ fn main() {
 				Command::StartPlaying => {
 					ui_state.reset();
 					game_state.kind = GameStateKind::Playing;
+					image_effect = ImageEffect::None;
+					elapsed_time = 0.0;
 
 					//Initialize the player's tank
 					player_tank_id = {
@@ -723,22 +744,44 @@ fn main() {
 						tanks.insert(tank)
 					};
 
-					//Add an enemy tank
 					let tank_forward = glm::vec3(1.0, 0.0, 0.0);
 					let tank_position = glm::vec3(4.5, 0.0, 0.0);
 					let tank = Tank::new(tank_position, tank_forward, &tank_skeleton, Brain::DumbAI);
 					tanks.insert(tank);
+
+					//Start the music
+					if let Some(sink) = &bgm_sink {
+						if sink.empty() {
+							let file = File::open(bgm_path).unwrap();
+							let source = rodio::Decoder::new(BufReader::new(file)).unwrap();
+							sink.append(source);
+							sink.set_volume(bgm_volume);
+						} else {
+							sink.play();
+							sink.set_volume(bgm_volume);
+						}
+					}
 				}
 				Command::ReturnToMainMenu => {
+					//Reset game state
 					tanks.clear();
 					shells.clear();
 
+					//Reset UI state
 					ui_state.reset();
-					title_section_index = ui_state.add_section(title_section.clone());
+					ui_state.add_section(title_section.clone());
 					ui_state.show_menu(main_menu_index);
 
 					image_effect = ImageEffect::None;
 					game_state.kind = GameStateKind::MainMenu;
+
+					//Stop the music
+					if let Some(sink) = &bgm_sink {
+						sink.stop();
+					}
+				}
+				Command::ToggleMenu(index) => {
+					ui_state.toggle_menu(index);
 				}
 			}
 		}
@@ -798,21 +841,24 @@ fn main() {
 						//Fire a shell if the tank's firing flag is set and if the tank is not in cooldown
 						if tank.firing {
 							tank.firing = false;
-							if elapsed_time < tank.last_shot_time + Tank::SHOT_COOLDOWN {
-								break;
+							let timer_expired = elapsed_time > tank.last_shot_time + Tank::SHOT_COOLDOWN;			//Has this tank cooled down from its last shot?
+							let shell_buffer_has_room = shells.count() < maximum_live_shells;						//Is the shell buffer completely full?
+
+							//If all conditions are met, fire a shell
+							if timer_expired && shell_buffer_has_room {
+								tank.last_shot_time = elapsed_time;
+	
+								let transform = tank.bones[1].transform;
+								let position = transform * glm::vec4(0.0, 0.0, 0.0, 1.0);
+								let velocity = tank.turret_forward * Shell::VELOCITY;
+	
+								shells.insert(Shell {
+									position,
+									velocity,
+									transform,
+									spawn_time: elapsed_time as f32
+								});								
 							}
-							tank.last_shot_time = elapsed_time;
-
-							let transform = tank.bones[1].transform;
-							let position = transform * glm::vec4(0.0, 0.0, 0.0, 1.0);
-							let velocity = tank.turret_forward * Shell::VELOCITY;
-
-							shells.insert(Shell {
-								position,
-								velocity,
-								transform,
-								spawn_time: elapsed_time as f32
-							});
 						}
 					}
 				}
@@ -830,7 +876,7 @@ fn main() {
 						}
 
 						//Update position
-						shell.position += shell.velocity * delta_time as f32;
+						shell.position += shell.velocity * delta_time;
 
 						//Update the translation part of the transform
 						shell.transform[12] = shell.position.x;
@@ -856,20 +902,6 @@ fn main() {
 										);
 					}
 				}
-			}
-			GameStateKind::Pausing => {
-				//Enable the pause menu
-				ui_state.show_menu(pause_menu_index);
-
-				game_state.kind = GameStateKind::Paused;
-				image_effect = ImageEffect::Blur;
-			}
-			GameStateKind::Resuming => {
-				//Remove the pause menu from the ui button list
-				ui_state.hide_menu(pause_menu_index);
-
-				game_state.kind = GameStateKind::Playing;
-				image_effect = ImageEffect::None;
 			}
 			GameStateKind::MainMenu => {}
 			GameStateKind::Paused => {}
@@ -957,8 +989,10 @@ fn main() {
 		//Create vao for the ui buttons
 		ui_state.update_button_vao();
 
-		//Rendering
+		//The names of the texture maps in shaders/mapped.frag
 		const TEXTURE_MAP_IDENTIFIERS: [&str; 4] = ["albedo_map", "normal_map", "roughness_map", "shadow_map"];
+
+		//Rendering
 		unsafe {
 			//Enable depth testing for 3D scene drawing
 			gl::Enable(gl::DEPTH_TEST);
@@ -976,7 +1010,7 @@ fn main() {
 				gl::DrawElements(gl::TRIANGLES, piece.index_count, gl::UNSIGNED_SHORT, ptr::null());
 			}
 
-			//Render tank
+			//Render tanks
 			gl::BindVertexArray(tank_skeleton.vao);
 			for i in 0..tanks.len() {
 				if let Some(tank) = &tanks[i] {
@@ -984,7 +1018,7 @@ fn main() {
 						let node_index = tank.skeleton.node_list[j];
 						glutil::bind_matrix4(shadow_shader, "mvp", &(shadow_projection * shadow_from_world * tank.bones[node_index].transform));
 
-						gl::DrawElements(gl::TRIANGLES, (tank.skeleton.geo_boundaries[j + 1] - tank.skeleton.geo_boundaries[j]) as i32, gl::UNSIGNED_SHORT, (mem::size_of::<GLushort>() * tank.skeleton.geo_boundaries[j] as usize) as *const c_void);
+						tank.skeleton.draw_bone(j);
 					}
 				}
 			}
@@ -1033,7 +1067,7 @@ fn main() {
 						glutil::bind_matrix4(mapped_shader, "model_matrix", &tank.bones[node_index].transform);
 						bind_texture_maps(&[tank.skeleton.albedo_maps[j], tank.skeleton.normal_maps[j], tank.skeleton.roughness_maps[j]]);
 		
-						gl::DrawElements(gl::TRIANGLES, (tank.skeleton.geo_boundaries[j + 1] - tank.skeleton.geo_boundaries[j]) as i32, gl::UNSIGNED_SHORT, (mem::size_of::<GLushort>() * tank.skeleton.geo_boundaries[j] as usize) as *const c_void);
+						tank.skeleton.draw_bone(j);						
 					}
 				}
 			}

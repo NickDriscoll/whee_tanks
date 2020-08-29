@@ -1,7 +1,8 @@
 use gl::types::*;
 use std::clone::Clone;
 use std::collections::HashMap;
-use std::ptr;
+use std::{mem, ptr};
+use std::os::raw::c_void;
 use ozy_engine::{glutil, routines};
 use crate::DEFAULT_TEX_PARAMS;
 use crate::input::{Command, InputKind};
@@ -58,6 +59,10 @@ pub struct Skeleton {
 impl Skeleton {
     pub fn get_bones(&self) -> Vec<Bone> {
         self.bones.clone()
+    }
+
+    pub unsafe fn draw_bone(&self, index: usize) {
+        gl::DrawElements(gl::TRIANGLES, (self.geo_boundaries[index + 1] - self.geo_boundaries[index]) as i32, gl::UNSIGNED_SHORT, (mem::size_of::<GLushort>() * self.geo_boundaries[index] as usize) as *const c_void);
     }
 }
 
@@ -300,9 +305,7 @@ impl GameState {
 pub enum GameStateKind {
     Playing,
     MainMenu,
-    Paused,
-    Pausing,
-    Resuming
+    Paused
 }
 
 pub enum ImageEffect {

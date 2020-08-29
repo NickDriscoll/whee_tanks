@@ -19,6 +19,7 @@ fn insert_index_buffer_quad(index_buffer: &mut [u16], i: usize) {
 
 //Subset of UIState created to fix some borrowing issues
 pub struct UIInternals<'a> {
+    vao_flag: bool,
     pub glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>,
     buttons: OptionVec<UIButton>,
     sections: OptionVec<Section<'a>>
@@ -27,15 +28,28 @@ pub struct UIInternals<'a> {
 impl<'a> UIInternals<'a> {
     pub fn new(glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>) -> Self {
         UIInternals {
+            vao_flag: false,
             glyph_brush,
             buttons: OptionVec::new(),
             sections: OptionVec::new()
         }
     }
+
+    pub fn add_button(&mut self, button: UIButton) -> usize {
+        self.vao_flag = true;
+        self.buttons.insert(button)
+    }
+
+    pub fn delete_button(&mut self, index: usize) {
+        self.vao_flag = true;
+        if let Some(button) = &self.buttons[index] {
+            self.sections.delete(button.section_id());
+            self.buttons.delete(index);
+        }
+    }
 }
 
 pub struct UIState<'a> {
-    vao_flag: bool,
     pub button_color_buffer: GLuint,
     pub buttons_vao: Option<GLuint>,
     pub internals: UIInternals<'a>,
@@ -48,7 +62,6 @@ impl<'a> UIState<'a> {
 
     pub fn new(menus: Vec<Menu<'a>>, glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>) -> Self {
         UIState {
-            vao_flag: false,
             button_color_buffer: 0,
             buttons_vao: None,
             internals: UIInternals::new(glyph_brush),
@@ -60,17 +73,13 @@ impl<'a> UIState<'a> {
 
     pub fn button_count(&self) -> usize { self.internals.buttons.count() }
 
-    pub fn get_sections(&self) -> &OptionVec<Section> { &self.internals.sections }
-
     pub fn hide_all_menus(&mut self) {
-        self.vao_flag = true;
         for menu in self.menus.iter_mut() {
             menu.hide(&mut self.internals);
         }
     }
 
-    pub fn hide_menu(&mut self, index: usize) {        
-        self.vao_flag = true;
+    pub fn hide_menu(&mut self, index: usize) {
         self.menus[index].hide(&mut self.internals);
     }
 
@@ -92,10 +101,9 @@ impl<'a> UIState<'a> {
         self.internals.sections.clear();
     }
 
-    pub fn show_menu(&mut self, index: usize) {         
-        self.vao_flag = true;
-        self.menus[index].show(&mut self.internals);
-    }
+    pub fn show_menu(&mut self, index: usize) { self.menus[index].show(&mut self.internals); }
+
+    pub fn toggle_menu(&mut self, index: usize) { self.menus[index].toggle(&mut self.internals); }
 
     //Gets input from the UI system and generates Commands for the command buffer I.E. user clicking on buttons
     //Also updates the instanced color buffer used for rendering the buttons
@@ -142,8 +150,8 @@ impl<'a> UIState<'a> {
 
     pub fn update_button_vao(&mut self) {
         //Create vao for the ui buttons
-		if self.vao_flag && self.button_count() > 0 {
-			self.vao_flag = false;
+		if self.internals.vao_flag && self.button_count() > 0 {
+			self.internals.vao_flag = false;
 			unsafe { 
 				let floats_per_button = 4 * 2;
 				let mut vertices = vec![0.0; self.button_count() * floats_per_button];
@@ -326,7 +334,7 @@ impl<'a> Menu<'a> {
 		    let section_id = ui_internals.sections.insert(section);
 
     		let button = UIButton::new(section_id, button_bounds, self.buttons[i].1);
-    		self.ids[i] = ui_internals.buttons.insert(button);
+    		self.ids[i] = ui_internals.add_button(button);
         }
         self.active = true;
     }
@@ -335,10 +343,7 @@ impl<'a> Menu<'a> {
     pub fn hide(&mut self, ui_internals: &mut UIInternals<'a>) {
         if !self.active { return; }
 		for id in self.ids.iter() {
-			if let Some(button) = &ui_internals.buttons[*id] {
-                ui_internals.sections.delete(button.section_id());
-                ui_internals.buttons.delete(*id);
-			}
+			ui_internals.delete_button(*id);
         }
         self.active = false;
     }
