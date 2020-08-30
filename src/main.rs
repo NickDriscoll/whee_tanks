@@ -7,7 +7,7 @@ use std::os::raw::c_void;
 use std::time::Instant;
 use glfw::{Action, Context, Key, MouseButton, WindowEvent, WindowMode};
 use gl::types::*;
-use glyph_brush::{ab_glyph::{FontArc, PxScale}, BrushAction, BrushError, GlyphBrushBuilder, GlyphCruncher, GlyphVertex, Section, Text};
+use glyph_brush::{ab_glyph::{FontArc, PxScale}, GlyphBrushBuilder, GlyphCruncher, Section, Text};
 use rodio::{Sink};
 use ozy_engine::{glutil, routines};
 use ozy_engine::structs::OptionVec;
@@ -39,26 +39,6 @@ unsafe fn initialize_texture_samplers(program: GLuint, identifiers: &[&str]) {
 	for i in 0..identifiers.len() {
 		glutil::bind_int(program, identifiers[i], i as GLint);
 	}
-}
-
-//Second argument to glyph_brush.process_queued()
-fn glyph_vertex_transform(vertex: GlyphVertex) -> [f32; 16] {	
-	let left = vertex.pixel_coords.min.x as f32;
-	let right = vertex.pixel_coords.max.x as f32;
-	let top = vertex.pixel_coords.min.y as f32;
-	let bottom = vertex.pixel_coords.max.y as f32;
-	let texleft = vertex.tex_coords.min.x;
-	let texright = vertex.tex_coords.max.x;
-	let textop = vertex.tex_coords.min.y;
-	let texbottom = vertex.tex_coords.max.y;
-
-	//We need to return four vertices in screen space
-	[
-		left, bottom, texleft, texbottom,
-		right, bottom, texright, texbottom,
-		left, top, texleft, textop,
-		right, top, texright, textop
-	]	
 }
 
 #[cfg(gloutput)]
@@ -114,15 +94,6 @@ extern "system" fn gl_debug_callback(source: GLenum, gltype: GLenum, id: GLuint,
 	};
 
 	println!("Message: {}", m);
-}
-
-fn insert_index_buffer_quad(index_buffer: &mut [u16], i: usize) {
-	index_buffer[i * 6] = 4 * i as u16;
-	index_buffer[i * 6 + 1] = index_buffer[i * 6] + 1;
-	index_buffer[i * 6 + 2] = index_buffer[i * 6] + 2;
-	index_buffer[i * 6 + 3] = index_buffer[i * 6] + 3;
-	index_buffer[i * 6 + 4] = index_buffer[i * 6] + 2;
-	index_buffer[i * 6 + 5] = index_buffer[i * 6] + 1;
 }
 
 pub unsafe fn draw_ui_elements(vao: GLuint, shader: GLuint, count: usize, clipping_from_screen: &glm::TMat4<f32>) {
@@ -461,24 +432,7 @@ fn main() {
 	};
 	let mut glyph_brush = GlyphBrushBuilder::using_font(font).build();
 
-	//Create the glyph texture
-	let glyph_texture = unsafe {
-		let (width, height) = glyph_brush.texture_dimensions();
-		let mut tex = 0;
-		gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
-		gl::GenTextures(1, &mut tex);
-		gl::BindTexture(gl::TEXTURE_2D, tex);
-		gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as _);
-		gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as _);
-		gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as _);
-		gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as _);
-		gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RED as GLint, width as GLint, height as GLint, 0, gl::RED, gl::UNSIGNED_BYTE, ptr::null());
-		tex
-	};
-
-	//Initialize glyph vao
-	let mut glyph_vao = None;
-	let mut glyph_count = 0;
+	//Transfrom from GLFW screen space to clipping space
 	let clipping_from_screen = glm::mat4(
 		2.0 / window_size.0 as f32, 0.0, 0.0, -1.0,
 		0.0, -(2.0 / window_size.1 as f32), 0.0, 1.0,
@@ -518,7 +472,7 @@ fn main() {
 			vec![
 				("Toggle collision volumes", None)
 			],
-			UIAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
+			UIAnchor::LeftAligned(20.0, 20.0)
 		);
 		menus.push(menu);
 
@@ -555,7 +509,7 @@ fn main() {
 		);
 		section
 	};
-	ui_state.add_section(title_section.clone());
+	let mut title_section_index = ui_state.add_section(title_section.clone());
 
 	//Background music data
 	let bgm_path = "music/factory.mp3";
@@ -619,9 +573,7 @@ fn main() {
 			let frame_instant = Instant::now();
 			let dur = frame_instant.duration_since(last_frame_instant);
 			last_frame_instant = frame_instant;
-
-			//There's an underlying assumption here that frames will always take less than one second to complete
-			(dur.subsec_millis() as f32 / 1000.0) + (dur.subsec_micros() as f32 / 1_000_000.0)
+			dur.as_secs_f32()
 		};
 
 		//Handle window events
@@ -667,12 +619,12 @@ fn main() {
 				}
 				Command::RotateLeft => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.rotating -= glm::half_pi::<f32>();
+						tank.rotating -= Tank::ROTATION_SPEED;
 					}
 				}
 				Command::RotateRight => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.rotating += glm::half_pi::<f32>();
+						tank.rotating += Tank::ROTATION_SPEED;
 					}
 				}
 				Command::StopMoveForwards => {
@@ -687,19 +639,20 @@ fn main() {
 				}
 				Command::StopRotateLeft => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.rotating += glm::half_pi::<f32>();
+						tank.rotating += Tank::ROTATION_SPEED;
 					}
 				}
 				Command::StopRotateRight => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.rotating -= glm::half_pi::<f32>();
+						tank.rotating -= Tank::ROTATION_SPEED;
 					}
 				}
 				Command::TogglePauseMenu => {
 					match game_state.kind {
 						GameStateKind::Paused => {
 							//Hide UI
-							ui_state.reset();			
+							ui_state.hide_menu(pause_menu_index);
+							ui_state.delete_section(title_section_index);
 							game_state.kind = GameStateKind::Playing;							
 							image_effect = ImageEffect::None;
 							if let Some(sink) = &bgm_sink {
@@ -714,7 +667,7 @@ fn main() {
 							
 							//Enable the pause menu
 							ui_state.show_menu(pause_menu_index);
-							ui_state.add_section(title_section.clone());
+							title_section_index = ui_state.add_section(title_section.clone());
 			
 							game_state.kind = GameStateKind::Paused;
 							image_effect = ImageEffect::Blur;
@@ -909,85 +862,7 @@ fn main() {
 		last_mouse_lbutton_pressed = mouse_lbutton_pressed;
 
 		//-----------Constructing UI elements for rendering-----------
-
-		//Queue glyph_brush sections
-		ui_state.queue_sections();
-
-		//glyph_brush processing
-		let mut glyph_result = ui_state.internals.glyph_brush.process_queued(|rect, tex_data| unsafe {
-			gl::TextureSubImage2D(
-				glyph_texture,
-				0,
-				rect.min[0] as _,
-				rect.min[1] as _,
-				rect.width() as _,
-				rect.height() as _,
-				gl::RED,
-				gl::UNSIGNED_BYTE,
-				tex_data.as_ptr() as _
-			);
-		}, glyph_vertex_transform);
-
-		//Repeatedly resize the glyph texture until the error stops
-		while let Err(BrushError::TextureTooSmall { suggested }) = glyph_result {
-			let (width, height) = suggested;
-			unsafe {
-				gl::BindTexture(gl::TEXTURE_2D, glyph_texture);
-				gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RED as GLint, width as GLint, height as GLint, 0, gl::RED, gl::UNSIGNED_BYTE, ptr::null());
-			}
-			ui_state.internals.glyph_brush.resize_texture(width, height);
-			glyph_result = ui_state.internals.glyph_brush.process_queued(|rect, tex_data| unsafe {
-				gl::TextureSubImage2D(
-					glyph_texture,
-					0,
-					rect.min[0] as _,
-					rect.min[1] as _,
-					rect.width() as _,
-					rect.height() as _,
-					gl::RED,
-					gl::UNSIGNED_BYTE,
-					tex_data.as_ptr() as _
-				);
-			}, glyph_vertex_transform);
-		}
-		
-		//This should never fail
-		match glyph_result.unwrap() {
-			BrushAction::Draw(verts) => {
-				if verts.len() > 0 {
-					let mut vertex_buffer = Vec::with_capacity(verts.len() * 16);
-					let mut index_buffer = vec![0; verts.len() * 6];
-					for i in 0..verts.len() {
-						for v in verts[i].iter() {
-							vertex_buffer.push(*v);
-						}
-						
-						//Fill out index buffer
-						insert_index_buffer_quad(&mut index_buffer, i);
-					}
-					glyph_count = verts.len();
-
-					match glyph_vao {
-						Some(mut vao) => unsafe {						
-							gl::DeleteVertexArrays(1, &mut vao);
-							glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &[2, 2]));
-						}
-						None => unsafe {
-							glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &[2, 2]));
-						}
-					}
-				} else {
-					if let Some(mut vao) = glyph_vao {
-						unsafe { gl::DeleteVertexArrays(1, &mut vao); }
-						glyph_vao = None;
-					}
-				}
-			}
-			BrushAction::ReDraw => {}
-		}
-
-		//Create vao for the ui buttons
-		ui_state.update_button_vao();
+		ui_state.synchronize();
 
 		//The names of the texture maps in shaders/mapped.frag
 		const TEXTURE_MAP_IDENTIFIERS: [&str; 4] = ["albedo_map", "normal_map", "roughness_map", "shadow_map"];
@@ -1141,12 +1016,12 @@ fn main() {
 			}
 
 			//Render text
-			if let Some(vao) = glyph_vao {
+			if let Some(vao) = ui_state.glyph_vao {
 				initialize_texture_samplers(glyph_shader, &["glyph_texture"]);
 				gl::ActiveTexture(gl::TEXTURE0);
-				gl::BindTexture(gl::TEXTURE_2D, glyph_texture);
+				gl::BindTexture(gl::TEXTURE_2D, ui_state.glyph_texture);
 
-				draw_ui_elements(vao, glyph_shader, glyph_count, &clipping_from_screen);
+				draw_ui_elements(vao, glyph_shader, ui_state.glyph_count, &clipping_from_screen);
 			}
 		}
 

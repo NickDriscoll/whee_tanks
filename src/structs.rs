@@ -90,10 +90,11 @@ pub struct Tank<'a> {
 }
 
 impl<'a> Tank<'a> {
-    pub const SPEED: f32 = 2.0;
+    pub const SPEED: f32 = 4.0;
+    pub const ROTATION_SPEED: f32 = 3.141592654;
+    pub const SHOT_COOLDOWN: f32 = 1.5;
     const HULL_INDEX: usize = 0;
     const TURRET_INDEX: usize = 1;
-    pub const SHOT_COOLDOWN: f32 = 1.5;
     
     pub fn new(position: glm::TVec3<f32>, forward: glm::TVec3<f32>, skeleton: &'a Skeleton, brain: Brain) -> Self {        
         Tank {
@@ -136,8 +137,8 @@ pub struct Shell {
 }
 
 impl Shell {
-    pub const VELOCITY: f32 = 2.0;
-    pub const LIFETIME: f32 = 5.0;
+    pub const VELOCITY: f32 = 6.0;
+    pub const LIFETIME: f32 = 4.0;
 }
 
 pub struct TextureKeeper {

@@ -1,7 +1,7 @@
 use crate::input::{Command};
 use ozy_engine::structs::{OptionVec};
 use ozy_engine::glutil;
-use glyph_brush::{GlyphBrush, GlyphCruncher, ab_glyph::PxScale, Section, Text};
+use glyph_brush::{BrushAction, BrushError, GlyphBrush, GlyphCruncher, GlyphVertex, ab_glyph::PxScale, Section, Rectangle, Text};
 use gl::types::*;
 use std::os::raw::c_void;
 use std::{mem, ptr};
@@ -15,6 +15,41 @@ fn insert_index_buffer_quad(index_buffer: &mut [u16], i: usize) {
 	index_buffer[i * 6 + 3] = index_buffer[i * 6] + 3;
 	index_buffer[i * 6 + 4] = index_buffer[i * 6] + 2;
 	index_buffer[i * 6 + 5] = index_buffer[i * 6] + 1;
+}
+
+//First argument to glyph_brush.process_queued()
+unsafe fn upload_glyph_texture(glyph_texture: GLuint, rect: Rectangle<u32>, data: &[u8]) {
+	gl::TextureSubImage2D(
+		glyph_texture,
+		0,
+		rect.min[0] as _,
+		rect.min[1] as _,
+		rect.width() as _,
+		rect.height() as _,
+		gl::RED,
+		gl::UNSIGNED_BYTE,
+		data.as_ptr() as _
+	);
+}
+
+//Second argument to glyph_brush.process_queued()
+fn glyph_vertex_transform(vertex: GlyphVertex) -> GlyphBrushVertexType {	
+	let left = vertex.pixel_coords.min.x as f32;
+	let right = vertex.pixel_coords.max.x as f32;
+	let top = vertex.pixel_coords.min.y as f32;
+	let bottom = vertex.pixel_coords.max.y as f32;
+	let texleft = vertex.tex_coords.min.x;
+	let texright = vertex.tex_coords.max.x;
+	let textop = vertex.tex_coords.min.y;
+	let texbottom = vertex.tex_coords.max.y;
+
+	//We need to return four vertices in screen space
+	[
+		left, bottom, texleft, texbottom,
+		right, bottom, texright, texbottom,
+		left, top, texleft, textop,
+		right, top, texright, textop
+	]	
 }
 
 //Subset of UIState created to fix some borrowing issues
@@ -40,6 +75,11 @@ impl<'a> UIInternals<'a> {
         self.buttons.insert(button)
     }
 
+    pub fn add_section(&mut self, section: Section<'a>) -> usize {
+        self.vao_flag = true;
+        self.sections.insert(section)
+    }
+
     pub fn delete_button(&mut self, index: usize) {
         self.vao_flag = true;
         if let Some(button) = &self.buttons[index] {
@@ -47,12 +87,20 @@ impl<'a> UIInternals<'a> {
             self.buttons.delete(index);
         }
     }
+
+    pub fn delete_section(&mut self, index: usize) {
+        self.vao_flag = true;
+        self.sections.delete(index);
+    }
 }
 
 pub struct UIState<'a> {
     pub button_color_buffer: GLuint,
     pub buttons_vao: Option<GLuint>,
     pub internals: UIInternals<'a>,
+    pub glyph_texture: GLuint,
+    pub glyph_vao: Option<GLuint>,
+    pub glyph_count: usize,
     menus: Vec<Menu<'a>>
 }
 
@@ -61,17 +109,94 @@ impl<'a> UIState<'a> {
     pub const COLORS_PER_BUTTON: usize = 4;
 
     pub fn new(menus: Vec<Menu<'a>>, glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>) -> Self {
+        //Create the glyph texture
+        let glyph_texture = unsafe {
+            let (width, height) = glyph_brush.texture_dimensions();
+            let mut tex = 0;
+            gl::PixelStorei(gl::UNPACK_ALIGNMENT, 1);
+            gl::GenTextures(1, &mut tex);
+            gl::BindTexture(gl::TEXTURE_2D, tex);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_S, gl::CLAMP_TO_EDGE as _);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_WRAP_T, gl::CLAMP_TO_EDGE as _);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MIN_FILTER, gl::LINEAR as _);
+            gl::TexParameteri(gl::TEXTURE_2D, gl::TEXTURE_MAG_FILTER, gl::LINEAR as _);
+            gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RED as GLint, width as GLint, height as GLint, 0, gl::RED, gl::UNSIGNED_BYTE, ptr::null());
+            tex
+        };
+
         UIState {
             button_color_buffer: 0,
             buttons_vao: None,
             internals: UIInternals::new(glyph_brush),
+            glyph_texture,
+            glyph_vao: None,
+            glyph_count: 0,
             menus
         }
     }
     
-    pub fn add_section(&mut self, section: Section<'a>) -> usize { self.internals.sections.insert(section) } //Adds a standalone section to the UI
+    pub fn add_section(&mut self, section: Section<'a>) -> usize { self.internals.add_section(section) } //Adds a standalone section to the UI
 
     pub fn button_count(&self) -> usize { self.internals.buttons.count() }
+
+    pub fn delete_section(&mut self, index: usize) { self.internals.delete_section(index); }
+
+    pub fn glyph_processing(&mut self) {
+        let glyph_tex = self.glyph_texture;
+
+        //glyph_brush processing
+		let mut glyph_result = self.internals.glyph_brush.process_queued(|rect, tex_data| unsafe { 
+			upload_glyph_texture(glyph_tex, rect, tex_data);
+		}, glyph_vertex_transform);
+
+		//Repeatedly resize the glyph texture until the error stops
+		while let Err(BrushError::TextureTooSmall { suggested }) = glyph_result {
+			let (width, height) = suggested;
+			unsafe {
+				gl::BindTexture(gl::TEXTURE_2D, self.glyph_texture);
+				gl::TexImage2D(gl::TEXTURE_2D, 0, gl::RED as GLint, width as GLint, height as GLint, 0, gl::RED, gl::UNSIGNED_BYTE, ptr::null());
+			}
+			self.internals.glyph_brush.resize_texture(width, height);
+			glyph_result = self.internals.glyph_brush.process_queued(|rect, tex_data| unsafe {
+				upload_glyph_texture(glyph_tex, rect, tex_data);
+			}, glyph_vertex_transform);
+		}
+		
+		//This should never fail
+		match glyph_result.unwrap() {
+			BrushAction::Draw(verts) => {
+				if verts.len() > 0 {
+					let mut vertex_buffer = Vec::with_capacity(verts.len() * 16);
+					let mut index_buffer = vec![0; verts.len() * 6];
+					for i in 0..verts.len() {
+						for v in verts[i].iter() {
+							vertex_buffer.push(*v);
+						}
+						
+						//Fill out index buffer
+						insert_index_buffer_quad(&mut index_buffer, i);
+					}
+					self.glyph_count = verts.len();
+
+					match self.glyph_vao {
+						Some(mut vao) => unsafe {
+							gl::DeleteVertexArrays(1, &mut vao);
+							self.glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &[2, 2]));
+						}
+						None => unsafe {
+							self.glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &[2, 2]));
+						}
+					}
+				} else {
+					if let Some(mut vao) = self.glyph_vao {
+						unsafe { gl::DeleteVertexArrays(1, &mut vao); }
+						self.glyph_vao = None;
+					}
+				}
+			}
+			BrushAction::ReDraw => {}
+		}
+    }
 
     pub fn hide_all_menus(&mut self) {
         for menu in self.menus.iter_mut() {
@@ -79,9 +204,7 @@ impl<'a> UIState<'a> {
         }
     }
 
-    pub fn hide_menu(&mut self, index: usize) {
-        self.menus[index].hide(&mut self.internals);
-    }
+    pub fn hide_menu(&mut self, index: usize) { self.menus[index].hide(&mut self.internals); }
 
     pub fn queue_sections(&mut self) {
         for sec in self.internals.sections.iter() {
@@ -102,6 +225,17 @@ impl<'a> UIState<'a> {
     }
 
     pub fn show_menu(&mut self, index: usize) { self.menus[index].show(&mut self.internals); }
+
+    pub fn synchronize(&mut self) {
+		//Queue glyph_brush sections
+		self.queue_sections();
+
+		//glyph_brush processing
+		self.glyph_processing();
+
+		//Create vao for the ui buttons
+		self.update_button_vao();
+    }
 
     pub fn toggle_menu(&mut self, index: usize) { self.menus[index].toggle(&mut self.internals); }
 
