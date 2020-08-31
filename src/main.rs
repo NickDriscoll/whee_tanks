@@ -359,6 +359,7 @@ fn main() {
 	//Set up the light source
 	let sun_direction = glm::normalize(&glm::vec4(1.0, 1.0, -1.0, 0.0));
 
+	//Frame timing data
 	let mut last_frame_instant = Instant::now();
 	let mut elapsed_time = 0.0;
 
@@ -370,7 +371,7 @@ fn main() {
 
 	let mut is_wireframe = false;
 
-	//Each frame this is filled with Command, then drained when processed
+	//Each frame this is filled with Commands, then drained when processed
 	let mut command_buffer = Vec::new();
 
 	//Initialize the shadow map
@@ -459,7 +460,7 @@ fn main() {
 		//Pause menu data
 		let menu = Menu::new(
 			vec![
-				("Resume", Some(Command::TogglePauseMenu)),
+				("Resume", Some(Command::UnPauseGame)),
 				("Settings", None),
 				("Main Menu", Some(Command::ReturnToMainMenu)),
 				("Exit", Some(Command::Quit)),
@@ -530,7 +531,7 @@ fn main() {
 		let key_bindings = {
 			let mut map = HashMap::new();
 
-			map.insert((InputKind::Key(Key::Escape), Action::Press), Command::TogglePauseMenu);
+			map.insert((InputKind::Key(Key::Escape), Action::Press), Command::PauseGame);
 			map.insert((InputKind::Key(Key::Q), Action::Press), Command::ToggleWireframe);
 			map.insert((InputKind::Key(Key::W), Action::Press), Command::MoveForwards);
 			map.insert((InputKind::Key(Key::S), Action::Press), Command::MoveBackwards);
@@ -553,7 +554,7 @@ fn main() {
 		let key_bindings = {
 			let mut map = HashMap::new();
 
-			map.insert((InputKind::Key(Key::Escape), Action::Press), Command::TogglePauseMenu);	
+			map.insert((InputKind::Key(Key::Escape), Action::Press), Command::UnPauseGame);	
 			map.insert((InputKind::Key(Key::GraveAccent), Action::Press), Command::ToggleMenu(debug_menu_index));
 
 			map
@@ -617,16 +618,6 @@ fn main() {
 						tank.speed += Tank::SPEED;
 					}
 				}
-				Command::RotateLeft => {
-					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.rotating -= Tank::ROTATION_SPEED;
-					}
-				}
-				Command::RotateRight => {
-					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.rotating += Tank::ROTATION_SPEED;
-					}
-				}
 				Command::StopMoveForwards => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
 						tank.speed += Tank::SPEED;
@@ -635,6 +626,16 @@ fn main() {
 				Command::StopMoveBackwards => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
 						tank.speed -= Tank::SPEED;
+					}
+				}
+				Command::RotateLeft => {
+					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
+						tank.rotating -= Tank::ROTATION_SPEED;
+					}
+				}
+				Command::RotateRight => {
+					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
+						tank.rotating += Tank::ROTATION_SPEED;
 					}
 				}
 				Command::StopRotateLeft => {
@@ -647,37 +648,32 @@ fn main() {
 						tank.rotating -= Tank::ROTATION_SPEED;
 					}
 				}
-				Command::TogglePauseMenu => {
-					match game_state.kind {
-						GameStateKind::Paused => {
-							//Hide UI
-							ui_state.hide_menu(pause_menu_index);
-							ui_state.delete_section(title_section_index);
-							game_state.kind = GameStateKind::Playing;							
-							image_effect = ImageEffect::None;
-							if let Some(sink) = &bgm_sink {
-								sink.set_volume(bgm_volume);
-							}
-						}
-						GameStateKind::Playing => {
-							if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-								tank.speed = 0.0;
-								tank.rotating = 0.0;
-							}
-							
-							//Enable the pause menu
-							ui_state.show_menu(pause_menu_index);
-							title_section_index = ui_state.add_section(title_section.clone());
-			
-							game_state.kind = GameStateKind::Paused;
-							image_effect = ImageEffect::Blur;
-							if let Some(sink) = &bgm_sink {
-								sink.set_volume(bgm_volume * 0.25);
-							}
-						}
-						_ => {}
+				Command::PauseGame => {
+					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
+						tank.speed = 0.0;
+						tank.rotating = 0.0;
+					}
+					
+					//Enable the pause menu
+					ui_state.show_menu(pause_menu_index);
+					title_section_index = ui_state.add_section(title_section.clone());
+	
+					game_state.kind = GameStateKind::Paused;
+					image_effect = ImageEffect::Blur;
+					if let Some(sink) = &bgm_sink {
+						sink.set_volume(bgm_volume * 0.25);
 					}
 				}
+				Command::UnPauseGame => {
+					//Hide UI
+					ui_state.hide_menu(pause_menu_index);
+					ui_state.delete_section(title_section_index);
+					game_state.kind = GameStateKind::Playing;							
+					image_effect = ImageEffect::None;
+					if let Some(sink) = &bgm_sink {
+						sink.set_volume(bgm_volume);
+					}
+				}				
 				Command::Fire => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
 						tank.firing = true;
@@ -872,6 +868,8 @@ fn main() {
 			//Enable depth testing for 3D scene drawing
 			gl::Enable(gl::DEPTH_TEST);
 
+			//-----------Shadow map rendering-----------
+
 			//Bind shadowmap fbo
 			shadow_rendertarget.bind();
 
@@ -904,7 +902,9 @@ fn main() {
 			glutil::bind_matrix4(shadow_shader_instanced, "view_projection", &(shadow_projection * shadow_from_world));
 			gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
 
-			//Main scene rendering
+			//-----------Main scene rendering-----------
+
+			//Bind first ping-pong fbo
 			ping_pong_fbos[0].bind();
 			
 			//Set polygon fill mode
@@ -970,13 +970,14 @@ fn main() {
 			glutil::bind_matrix4(mapped_instanced_shader, "view_projection", &clipping_from_world);
 			gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
 
-			//Apply post-processing effects
-			gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);
-			gl::BindVertexArray(postprocessing_vao);
+			//-----------Apply post-processing effects-----------
+			gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);			//Disable wireframe rendering for this section if it was enabled
+			gl::BindVertexArray(postprocessing_vao);				//Bind the VAO that just defines a screen-filling triangle
 			gl::ActiveTexture(gl::TEXTURE0);
 
 			//Apply the active image effect
 			match image_effect {
+				//TODO: This blur is horribly inefficient. Need to use a downscaled version of the FBO (mipmapping?) and fewer blur passes
 				ImageEffect::Blur => {
 					let passes = 8;
 					initialize_texture_samplers(passthrough_shader, &["image_texture"]);
@@ -988,7 +989,7 @@ fn main() {
 						for i in 0..ping_pong_fbos.len() {
 							ping_pong_fbos[i ^ 1].bind();
 							gl::BindTexture(gl::TEXTURE_2D, ping_pong_fbos[i].texture);
-							glutil::bind_int(gaussian_shader, "horizontal", i as GLint ^ 1);
+							glutil::bind_int(gaussian_shader, "horizontal", i as GLint ^ 1);		//Flag if this is a horizontal or vertical blur pass
 							gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
 						}
 					}
