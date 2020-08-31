@@ -141,7 +141,84 @@ impl<'a> UIState<'a> {
 
     pub fn delete_section(&mut self, index: usize) { self.internals.delete_section(index); }
 
-    pub fn glyph_processing(&mut self) {
+    pub fn hide_all_menus(&mut self) {
+        for menu in self.menus.iter_mut() {
+            menu.hide(&mut self.internals);
+        }
+    }
+
+    pub fn hide_menu(&mut self, index: usize) { self.menus[index].hide(&mut self.internals); }
+
+    //Clears the data in self.internals and marks all menus as inactive
+    pub fn reset(&mut self) {
+        for menu in self.menus.iter_mut() {
+            menu.hide(&mut self.internals);
+        }
+
+        self.internals.buttons.clear();
+        self.internals.sections.clear();
+    }
+
+	//Call this function each frame right before rendering
+    pub fn synchronize(&mut self) {
+		//Queue glyph_brush sections
+		self.queue_sections();
+
+		//glyph_brush processing
+		self.glyph_processing();
+
+		//Create vao for the ui buttons
+		self.update_button_vao();
+    }
+
+    pub fn show_menu(&mut self, index: usize) { self.menus[index].show(&mut self.internals); }
+
+    pub fn toggle_menu(&mut self, index: usize) { self.menus[index].toggle(&mut self.internals); }
+
+    //Gets input from the UI system and generates Commands for the command buffer I.E. user clicking on buttons
+    //Also updates the instanced color buffer used for rendering the buttons
+    //Meant to be called once per frame
+    pub fn update_buttons(&mut self, screen_space_mouse: glm::TVec2<f32>, mouse_lbutton_pressed: bool, mouse_lbutton_pressed_last_frame: bool, command_buffer: &mut Vec<Command>) {        
+		//Handle input from the UI buttons
+		let mut current_button = 0;
+		for i in 0..self.internals.buttons.len() {
+			if let Some(button) = self.internals.buttons.get_mut_element(i) {
+				if screen_space_mouse.x > button.bounds.min[0] &&
+				   screen_space_mouse.x < button.bounds.max[0] &&
+				   screen_space_mouse.y > button.bounds.min[1] &&
+				   screen_space_mouse.y < button.bounds.max[1] {
+
+					if mouse_lbutton_pressed_last_frame && !mouse_lbutton_pressed {
+						if let Some(command) = button.command {
+							command_buffer.push(command);
+						}
+					}
+
+					//Handle updating button graphics
+					if button.state == ButtonState::None || (mouse_lbutton_pressed == mouse_lbutton_pressed_last_frame) {
+						let color = if mouse_lbutton_pressed {
+							[0.0, 0.8, 0.0, 0.5]
+						} else {
+							[0.0, 0.4, 0.0, 0.5]
+						};
+						unsafe { Self::update_ui_button_color(self.button_color_buffer, current_button, color); }
+
+						button.state = ButtonState::Highlighted;
+					}
+				} else {
+					if button.state != ButtonState::None {
+						let color = [0.0, 0.0, 0.0, 0.5];
+						unsafe { Self::update_ui_button_color(self.button_color_buffer, current_button, color); }
+
+						button.state = ButtonState::None;
+					}
+				}				
+				current_button += 1;
+			}
+		}
+    }
+
+    fn glyph_processing(&mut self) {
         let glyph_tex = self.glyph_texture;
 
         //glyph_brush processing
@@ -198,15 +275,7 @@ impl<'a> UIState<'a> {
 		}
     }
 
-    pub fn hide_all_menus(&mut self) {
-        for menu in self.menus.iter_mut() {
-            menu.hide(&mut self.internals);
-        }
-    }
-
-    pub fn hide_menu(&mut self, index: usize) { self.menus[index].hide(&mut self.internals); }
-
-    pub fn queue_sections(&mut self) {
+    fn queue_sections(&mut self) {
         for sec in self.internals.sections.iter() {
 			if let Some(s) = sec {
 				self.internals.glyph_brush.queue(s);
@@ -214,75 +283,7 @@ impl<'a> UIState<'a> {
 		}
     }
 
-    //Clears the data in self.internals and marks all menus as inactive
-    pub fn reset(&mut self) {
-        for menu in self.menus.iter_mut() {
-            menu.hide(&mut self.internals);
-        }
-
-        self.internals.buttons.clear();
-        self.internals.sections.clear();
-    }
-
-    pub fn show_menu(&mut self, index: usize) { self.menus[index].show(&mut self.internals); }
-
-    pub fn synchronize(&mut self) {
-		//Queue glyph_brush sections
-		self.queue_sections();
-
-		//glyph_brush processing
-		self.glyph_processing();
-
-		//Create vao for the ui buttons
-		self.update_button_vao();
-    }
-
-    pub fn toggle_menu(&mut self, index: usize) { self.menus[index].toggle(&mut self.internals); }
-
-    //Gets input from the UI system and generates Commands for the command buffer I.E. user clicking on buttons
-    //Also updates the instanced color buffer used for rendering the buttons
-    //Meant to be called once per frame
-    pub fn update_buttons(&mut self, screen_space_mouse: glm::TVec2<f32>, mouse_lbutton_pressed: bool, mouse_lbutton_pressed_last_frame: bool, command_buffer: &mut Vec<Command>) {        
-		//Handle input from the UI buttons
-		let mut current_button = 0;
-		for i in 0..self.internals.buttons.len() {
-			if let Some(button) = self.internals.buttons.get_mut_element(i) {
-				if screen_space_mouse.x > button.bounds.min[0] &&
-				   screen_space_mouse.x < button.bounds.max[0] &&
-				   screen_space_mouse.y > button.bounds.min[1] &&
-				   screen_space_mouse.y < button.bounds.max[1] {
-
-					if mouse_lbutton_pressed_last_frame && !mouse_lbutton_pressed {
-						if let Some(command) = button.command {
-							command_buffer.push(command);
-						}
-					}
-
-					//Handle updating button graphics
-					if button.state == ButtonState::None || (mouse_lbutton_pressed == mouse_lbutton_pressed_last_frame) {
-						let color = if mouse_lbutton_pressed {
-							[0.0, 0.8, 0.0, 0.5]
-						} else {
-							[0.0, 0.4, 0.0, 0.5]
-						};
-						unsafe { Self::update_ui_button_color(self.button_color_buffer, current_button, color); }
-
-						button.state = ButtonState::Highlighted;
-					}
-				} else {
-					if button.state != ButtonState::None {
-						let color = [0.0, 0.0, 0.0, 0.5];
-						unsafe { Self::update_ui_button_color(self.button_color_buffer, current_button, color); }
-
-						button.state = ButtonState::None;
-					}
-				}				
-				current_button += 1;
-			}
-		}
-    }
-
-    pub fn update_button_vao(&mut self) {
+    fn update_button_vao(&mut self) {
         //Create vao for the ui buttons
 		if self.internals.vao_flag && self.button_count() > 0 {
 			self.internals.vao_flag = false;
