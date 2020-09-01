@@ -23,7 +23,8 @@ pub enum Command {
     PauseGame,
     UnPauseGame,
     ToggleMenu(usize),
-    //ToggleFullScreen,
+    GoToMenu(usize, usize),
+    ToggleFullScreen,
     StartPlaying,
     ReturnToMainMenu
 }

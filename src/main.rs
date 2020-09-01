@@ -109,8 +109,10 @@ pub fn submit_input_command(input: &Input, command_buffer: &mut Vec<Command>, bi
 	}
 }
 
+const WINDOWED_SIZE: (u32, u32) = (1920, 1080);
 fn main() {
-	let mut window_size = (1920, 1080);
+	let mut is_fullscreen = false;
+	let mut window_size = WINDOWED_SIZE;
 	let mut aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
 	let game_title = "Whee! Tanks! for ipad";
 
@@ -129,21 +131,6 @@ fn main() {
 
 	//Make the window non-resizable
 	window.set_resizable(false);
-
-	//Make the window fullscreen
-	/*
-	glfw.with_primary_monitor_mut(|_, opt_monitor| {
-		if let Some(monitor) = opt_monitor {
-			let pos = monitor.get_pos();
-			if let Some(mode) = monitor.get_video_mode() {
-				window_size = (mode.width, mode.height);
-				aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
-				window.set_size(window_size.0 as i32, window_size.1 as i32);
-				window.set_monitor(WindowMode::FullScreen(monitor), pos.0, pos.1, window_size.0, window_size.1, Some(144));
-			}
-		}
-	});
-	*/
 
 	//Configure which window events GLFW will listen for
 	window.set_key_polling(true);
@@ -174,7 +161,7 @@ fn main() {
 	}
 
 	//Framebuffers used for image effects
-	let ping_pong_fbos = unsafe {
+	let mut ping_pong_fbos = unsafe {
 		let size = (window_size.0 as GLint, window_size.1 as GLint);
 		[RenderTarget::new(size), RenderTarget::new(size)]
 	};
@@ -190,7 +177,7 @@ fn main() {
 	};
 
 	//Initialize default framebuffer
-	let default_framebuffer = Framebuffer {
+	let mut default_framebuffer = Framebuffer {
 		name: 0,
 		size: (window_size.0 as GLsizei, window_size.1 as GLsizei),
 		clear_flags: gl::DEPTH_BUFFER_BIT | gl::COLOR_BUFFER_BIT,
@@ -350,10 +337,6 @@ fn main() {
 								0.0, 0.0, 0.0, 1.0) * glm::look_at(&glm::vec3(0.0, 1.5, -1.0), &glm::vec3(0.0, 0.0, 0.0), &glm::vec3(0.0, 1.0, 0.0));
 	let world_from_view = glm::affine_inverse(view_from_world);
 	let ortho_size = 5.0;
-	let clipping_from_view = glm::ortho(-ortho_size*aspect_ratio, ortho_size*aspect_ratio, -ortho_size, ortho_size, -ortho_size, ortho_size * 2.0);
-	let clipping_from_world = clipping_from_view * view_from_world;
-	let world_from_clipping = glm::affine_inverse(clipping_from_world);
-
 	let world_space_look_direction = world_from_view * glm::vec4(0.0, 0.0, 1.0, 0.0);
 
 	//Set up the light source
@@ -362,12 +345,6 @@ fn main() {
 	//Frame timing data
 	let mut last_frame_instant = Instant::now();
 	let mut elapsed_time = 0.0;
-
-	//Mouse state
-	let mut world_space_mouse = world_from_clipping * glm::vec4(0.0, 0.0, 0.0, 1.0);
-	let mut screen_space_mouse = glm::vec2(0.0, 0.0);
-	let mut mouse_lbutton_pressed = false;
-	let mut last_mouse_lbutton_pressed = false;
 
 	let mut is_wireframe = false;
 
@@ -433,15 +410,29 @@ fn main() {
 	};
 	let mut glyph_brush = GlyphBrushBuilder::using_font(font).build();
 
+	//Variables that depend on screen size
+	let mut clipping_from_view = glm::ortho(-ortho_size*aspect_ratio, ortho_size*aspect_ratio, -ortho_size, ortho_size, -ortho_size, ortho_size * 2.0);
+	let mut clipping_from_world = clipping_from_view * view_from_world;
+	let mut world_from_clipping = glm::affine_inverse(clipping_from_world);
 	//Transfrom from GLFW screen space to clipping space
-	let clipping_from_screen = glm::mat4(
+	let mut clipping_from_screen = glm::mat4(
 		2.0 / window_size.0 as f32, 0.0, 0.0, -1.0,
 		0.0, -(2.0 / window_size.1 as f32), 0.0, 1.0,
 		0.0, 0.0, 1.0, 0.0,
 		0.0, 0.0, 0.0, 1.0
 	);
 
+	//Mouse state
+	let mut world_space_mouse = world_from_clipping * glm::vec4(0.0, 0.0, 0.0, 1.0);
+	let mut screen_space_mouse = glm::vec2(0.0, 0.0);
+	let mut mouse_lbutton_pressed = false;
+	let mut last_mouse_lbutton_pressed = false;
+
 	//Data structure of all UI state
+	let main_menu_index = 0;
+	let pause_menu_index = 1;
+	let dev_menu_index = 2;
+	let settings_menu_index = 3;
 	let mut ui_state = {
 		let mut menus = Vec::new();
 		
@@ -450,7 +441,7 @@ fn main() {
 			vec![
 				("Singleplayer", Some(Command::StartPlaying)),
 				("Multiplayer", None),
-				("Settings", None),
+				("Settings", Some(Command::GoToMenu(main_menu_index, settings_menu_index))),
 				("Exit", Some(Command::Quit)),
 			],
 			UIAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
@@ -461,7 +452,7 @@ fn main() {
 		let menu = Menu::new(
 			vec![
 				("Resume", Some(Command::UnPauseGame)),
-				("Settings", None),
+				//("Settings", Some(Command::GoToMenu(pause_menu_index, settings_menu_index))),
 				("Main Menu", Some(Command::ReturnToMainMenu)),
 				("Exit", Some(Command::Quit)),
 			],
@@ -469,6 +460,7 @@ fn main() {
 		);
 		menus.push(menu);
 
+		//Dev menu
 		let menu = Menu::new(
 			vec![
 				("Toggle collision volumes", None)
@@ -478,25 +470,21 @@ fn main() {
 		menus.push(menu);
 
 		//Settings menu data
-		/*
-		let mut menu = Menu::new(
+		let menu = Menu::new(
 			vec![
-				("Back", Some(Command::ToggleFullScreen))
+				("Toggle fullscreen", Some(Command::ToggleFullScreen)),
+				("Back", Some(Command::GoToMenu(settings_menu_index, main_menu_index))),
 			],
 			UIAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
 		);
 		menus.push(menu);
-		*/
 
 		UIState::new(menus, &mut glyph_brush)
 	};
-	let main_menu_index = 0;
-	let pause_menu_index = 1;
-	let debug_menu_index = 2;
 	ui_state.show_menu(main_menu_index);
 
 	//Title text
-	let title_section = {
+	let mut title_section = {
 		let font_size = 72.0;
 		let section = Section::new();
 		let mut text = Text::new(game_title).with_color([1.0, 1.0, 1.0, 1.0]);
@@ -537,7 +525,7 @@ fn main() {
 			map.insert((InputKind::Key(Key::S), Action::Press), Command::MoveBackwards);
 			map.insert((InputKind::Key(Key::A), Action::Press), Command::RotateLeft);
 			map.insert((InputKind::Key(Key::D), Action::Press), Command::RotateRight);
-			map.insert((InputKind::Key(Key::GraveAccent), Action::Press), Command::ToggleMenu(debug_menu_index));
+			map.insert((InputKind::Key(Key::GraveAccent), Action::Press), Command::ToggleMenu(dev_menu_index));
 			map.insert((InputKind::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
 
 			//The keys here depend on the earlier bindings
@@ -555,7 +543,7 @@ fn main() {
 			let mut map = HashMap::new();
 
 			map.insert((InputKind::Key(Key::Escape), Action::Press), Command::UnPauseGame);	
-			map.insert((InputKind::Key(Key::GraveAccent), Action::Press), Command::ToggleMenu(debug_menu_index));
+			map.insert((InputKind::Key(Key::GraveAccent), Action::Press), Command::ToggleMenu(dev_menu_index));
 
 			map
 		};
@@ -564,7 +552,7 @@ fn main() {
 		GameState::new(GameStateKind::MainMenu, input_maps)
 	};
 
-	//Variable that determines what the update step looks like
+	//Effect to use during the image effect step
 	let mut image_effect = ImageEffect::None;
 
 	//Main loop
@@ -588,7 +576,9 @@ fn main() {
 				WindowEvent::MouseButton(button, action, ..) => {
 					submit_input_command(&(InputKind::Mouse(button), action), &mut command_buffer, &key_bindings);
 
-					mouse_lbutton_pressed = action == Action::Press;
+					if button == MouseButton::Button1 {
+						mouse_lbutton_pressed = action == Action::Press;
+					}
 				}
 				WindowEvent::CursorPos(x, y) => {
 					screen_space_mouse = glm::vec2(x as f32, y as f32);
@@ -608,6 +598,52 @@ fn main() {
 			match command {
 				Command::Quit => { window.set_should_close(true); }
 				Command::ToggleWireframe => { is_wireframe = !is_wireframe; }
+				Command::ToggleFullScreen => {
+					if is_fullscreen {
+						window_size = WINDOWED_SIZE;
+						aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
+						//window.set_size(window_size.0 as i32, window_size.1 as i32);
+						window.set_monitor(WindowMode::Windowed, 200, 200, window_size.0, window_size.1, Some(144));
+
+					} else {
+						glfw.with_primary_monitor_mut(|_, opt_monitor| {
+							if let Some(monitor) = opt_monitor {
+								let pos = monitor.get_pos();
+								if let Some(mode) = monitor.get_video_mode() {
+									window_size = (mode.width, mode.height);
+									aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
+									//window.set_size(window_size.0 as i32, window_size.1 as i32);
+									window.set_monitor(WindowMode::FullScreen(monitor), pos.0, pos.1, window_size.0, window_size.1, Some(144));
+								}
+							}
+						});
+					}
+					is_fullscreen = !is_fullscreen;
+
+					//Update the variables that depend on screen size
+					unsafe {
+						ping_pong_fbos[0].resize(window_size);
+						ping_pong_fbos[1].resize(window_size);
+					}
+					default_framebuffer.size = (window_size.0 as GLsizei, window_size.1 as GLsizei);
+					ui_state.update_screen_size(window_size);
+					let bounding_box = ui_state.internals.glyph_brush.glyph_bounds(&title_section).unwrap();
+					title_section.screen_position = (
+						window_size.0 as f32 / 2.0 - bounding_box.width() / 2.0,
+						40.0
+					);
+					ui_state.delete_section(title_section_index);
+					title_section_index = ui_state.add_section(title_section.clone());
+					clipping_from_view = glm::ortho(-ortho_size*aspect_ratio, ortho_size*aspect_ratio, -ortho_size, ortho_size, -ortho_size, ortho_size * 2.0);
+					clipping_from_world = clipping_from_view * view_from_world;
+					world_from_clipping = glm::affine_inverse(clipping_from_world);
+					clipping_from_screen = glm::mat4(
+						2.0 / window_size.0 as f32, 0.0, 0.0, -1.0,
+						0.0, -2.0 / window_size.1 as f32, 0.0, 1.0,
+						0.0, 0.0, 1.0, 0.0,
+						0.0, 0.0, 0.0, 1.0
+					);
+				}
 				Command::MoveForwards => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
 						tank.speed -= Tank::SPEED;
@@ -666,8 +702,11 @@ fn main() {
 				}
 				Command::UnPauseGame => {
 					//Hide UI
+					/*
 					ui_state.hide_menu(pause_menu_index);
 					ui_state.delete_section(title_section_index);
+					*/
+					ui_state.reset();
 					game_state.kind = GameStateKind::Playing;							
 					image_effect = ImageEffect::None;
 					if let Some(sink) = &bgm_sink {
@@ -718,7 +757,7 @@ fn main() {
 
 					//Reset UI state
 					ui_state.reset();
-					ui_state.add_section(title_section.clone());
+					title_section_index = ui_state.add_section(title_section.clone());
 					ui_state.show_menu(main_menu_index);
 
 					image_effect = ImageEffect::None;
@@ -731,6 +770,10 @@ fn main() {
 				}
 				Command::ToggleMenu(index) => {
 					ui_state.toggle_menu(index);
+				}
+				Command::GoToMenu(src, dst) => {
+					ui_state.hide_menu(src);
+					ui_state.show_menu(dst);
 				}
 			}
 		}

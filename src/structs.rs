@@ -272,6 +272,13 @@ impl RenderTarget {
     pub unsafe fn bind(&self) {
         self.framebuffer.bind();
     }
+
+    pub unsafe fn resize(&mut self, size: (u32, u32)) {
+        gl::DeleteFramebuffers(1, &self.framebuffer.name);
+        let n = Self::new((size.0 as GLint, size.1 as GLint));
+        self.framebuffer = n.framebuffer;
+        self.texture = n.texture;
+    }
 }
 
 //Determines what to do during the update step for a given entity

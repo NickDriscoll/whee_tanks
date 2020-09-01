@@ -151,13 +151,14 @@ impl<'a> UIState<'a> {
 
     //Clears the data in self.internals and marks all menus as inactive
     pub fn reset(&mut self) {
-        for menu in self.menus.iter_mut() {
-            menu.hide(&mut self.internals);
-        }
-
         self.internals.buttons.clear();
         self.internals.sections.clear();
+        for menu in self.menus.iter_mut() {
+			menu.active = false;
+        }
     }
+
+	pub fn show_menu(&mut self, index: usize) { self.menus[index].show(&mut self.internals); }
 
 	//Call this function each frame right before rendering
     pub fn synchronize(&mut self) {
@@ -170,8 +171,6 @@ impl<'a> UIState<'a> {
 		//Create vao for the ui buttons
 		self.update_button_vao();
     }
-
-    pub fn show_menu(&mut self, index: usize) { self.menus[index].show(&mut self.internals); }
 
     pub fn toggle_menu(&mut self, index: usize) { self.menus[index].toggle(&mut self.internals); }
 
@@ -216,7 +215,19 @@ impl<'a> UIState<'a> {
 				current_button += 1;
 			}
 		}
-    }
+	}
+	
+	pub fn update_screen_size(&mut self, size: (u32, u32)) {
+		for menu in self.menus.iter_mut() {
+			if let UIAnchor::CenterAligned(_, _) = menu.anchor {
+				menu.anchor = UIAnchor::CenterAligned(size.0 as f32 / 2.0, size.1 as f32 / 3.0);
+				if menu.active {
+					menu.toggle(&mut self.internals);
+					menu.toggle(&mut self.internals);
+				}
+			}
+		}
+	}
 
     fn glyph_processing(&mut self) {
         let glyph_tex = self.glyph_texture;
@@ -418,7 +429,7 @@ impl<'a> Menu<'a> {
     }
 
     //Adds this menu's data to the arrays of buttons and sections
-    pub fn show<'b>(&mut self, ui_internals: &mut UIInternals<'a>) {
+    pub fn show(&mut self, ui_internals: &mut UIInternals<'a>) {
         if self.active { return; }
 
         //Submit the pause menu data
@@ -483,7 +494,7 @@ impl<'a> Menu<'a> {
         self.active = false;
     }
 
-    pub fn toggle<'b>(&mut self, ui_internals: &mut UIInternals<'a>) {
+    pub fn toggle(&mut self, ui_internals: &mut UIInternals<'a>) {
         if self.active {
             self.hide(ui_internals);
         } else {
