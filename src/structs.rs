@@ -183,6 +183,14 @@ impl Framebuffer {
     }
 }
 
+impl Drop for Framebuffer {
+    fn drop(&mut self) {
+        unsafe {
+            gl::DeleteFramebuffers(1, &self.name);
+        }
+    }
+}
+
 //A framebuffer object with color and depth attachments
 pub struct RenderTarget {
     pub framebuffer: Framebuffer,
@@ -324,6 +332,8 @@ pub enum ImageEffect {
 pub struct ScreenState {
     pub window_size: (u32, u32),
     pub aspect_ratio: f32,
+    pub ping_pong_fbos: [RenderTarget; 2],
+    pub default_framebuffer: Framebuffer,
     pub clipping_from_view: glm::TMat4<f32>,
     pub clipping_from_world: glm::TMat4<f32>,
     pub world_from_clipping: glm::TMat4<f32>,
@@ -345,9 +355,25 @@ impl ScreenState {
             0.0, 0.0, 0.0, 1.0
         );
 
+        //Initialize the two offscreen rendertargets used for post-processing
+        let ping_pong_fbos = unsafe {
+            let size = (window_size.0 as GLint, window_size.1 as GLint);
+            [RenderTarget::new(size), RenderTarget::new(size)]            
+        };
+
+        //Initialize default framebuffer
+        let default_framebuffer = Framebuffer {
+            name: 0,
+            size: (window_size.0 as GLsizei, window_size.1 as GLsizei),
+            clear_flags: gl::DEPTH_BUFFER_BIT | gl::COLOR_BUFFER_BIT,
+            cull_face: gl::BACK
+        };    
+
         ScreenState {
             window_size,
             aspect_ratio,
+            ping_pong_fbos,
+            default_framebuffer,
             clipping_from_view,
             clipping_from_world,
             world_from_clipping,

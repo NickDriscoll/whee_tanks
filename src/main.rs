@@ -123,7 +123,7 @@ fn main() {
 	let world_space_look_direction = world_from_view * glm::vec4(0.0, 0.0, 1.0, 0.0);
 
 	//Variables that depend on screen size
-	let mut screen_state = ScreenState::new((1920, 1080), &view_from_world);
+	let screen_size = (1920, 1080);
 
 	//Init glfw
 	let mut glfw = match glfw::init(glfw::FAIL_ON_ERRORS) {
@@ -136,7 +136,7 @@ fn main() {
 	glfw.window_hint(glfw::WindowHint::OpenGlDebugContext(true));
 
 	//Create window
-    let (mut window, events) = glfw.create_window(screen_state.window_size.0, screen_state.window_size.1, game_title, WindowMode::Windowed).unwrap();
+    let (mut window, events) = glfw.create_window(screen_size.0, screen_size.1, game_title, WindowMode::Windowed).unwrap();
 
 	//Make the window non-resizable
 	window.set_resizable(false);
@@ -150,6 +150,9 @@ fn main() {
 
 	//Initialize all OpenGL function pointers
 	gl::load_with(|symbol| window.get_proc_address(symbol) as *const _);
+
+	//Struct of state that depends on screen size
+	let mut screen_state = ScreenState::new(screen_size, &view_from_world);
 
 	//OpenGL static configuration
 	unsafe {
@@ -168,20 +171,6 @@ fn main() {
 			gl::DebugMessageControl(gl::DONT_CARE, gl::DONT_CARE, gl::DONT_CARE, 0, ptr::null(), gl::TRUE);
 		}
 	}
-
-	//Framebuffers used for image effects
-	let mut ping_pong_fbos = unsafe {
-		let size = (screen_state.window_size.0 as GLint, screen_state.window_size.1 as GLint);
-		[RenderTarget::new(size), RenderTarget::new(size)]
-	};
-
-	//Initialize default framebuffer
-	let mut default_framebuffer = Framebuffer {
-		name: 0,
-		size: (screen_state.window_size.0 as GLsizei, screen_state.window_size.1 as GLsizei),
-		clear_flags: gl::DEPTH_BUFFER_BIT | gl::COLOR_BUFFER_BIT,
-		cull_face: gl::BACK
-	};
 
 	//Screen filling triangle with uvs chosen such that the sampled image exactly covers the screen
 	let postprocessing_vao = unsafe {
@@ -610,14 +599,6 @@ fn main() {
 					}
 					is_fullscreen = !is_fullscreen;
 
-					//Update the variables that depend on screen size
-					unsafe {
-						for fbo in ping_pong_fbos.iter_mut() {
-							fbo.resize(screen_state.window_size);
-						}
-					}
-					default_framebuffer.size = (screen_state.window_size.0 as GLsizei, screen_state.window_size.1 as GLsizei);
-
 					//Update the UI elements that depend on screen size
 					ui_state.update_screen_size(screen_state.window_size);
 					let bounding_box = ui_state.internals.glyph_brush.glyph_bounds(&title_section).unwrap();
@@ -882,7 +863,7 @@ fn main() {
 		}
 		last_mouse_lbutton_pressed = mouse_lbutton_pressed;
 
-		//-----------Constructing UI elements for rendering-----------
+		//-----------CPU-side UI element rendering-----------
 		ui_state.synchronize();
 
 		//The names of the texture maps in shaders/mapped.frag
@@ -930,7 +911,7 @@ fn main() {
 			//-----------Main scene rendering-----------
 
 			//Bind first ping-pong fbo
-			ping_pong_fbos[0].bind();
+			screen_state.ping_pong_fbos[0].bind();
 			
 			//Set polygon fill mode
 			if is_wireframe { gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE); }
@@ -1011,24 +992,24 @@ fn main() {
 					gl::UseProgram(gaussian_shader);
 					for _ in 0..passes {
 						//Do a horizontal pass followed by a vertical one. This reduces complexity from N^2 to 2N
-						for i in 0..ping_pong_fbos.len() {
-							ping_pong_fbos[i ^ 1].bind();
-							gl::BindTexture(gl::TEXTURE_2D, ping_pong_fbos[i].texture);
+						for i in 0..screen_state.ping_pong_fbos.len() {
+							screen_state.ping_pong_fbos[i ^ 1].bind();
+							gl::BindTexture(gl::TEXTURE_2D, screen_state.ping_pong_fbos[i].texture);
 							glutil::bind_int(gaussian_shader, "horizontal", i as GLint ^ 1);		//Flag if this is a horizontal or vertical blur pass
 							gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
 						}
 					}
 	
 					//Render result to the default framebuffer
-					default_framebuffer.bind();
+					screen_state.default_framebuffer.bind();
 					gl::UseProgram(passthrough_shader);
-					gl::BindTexture(gl::TEXTURE_2D, ping_pong_fbos[0].texture);
+					gl::BindTexture(gl::TEXTURE_2D, screen_state.ping_pong_fbos[0].texture);
 					gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
 				}
 				ImageEffect::None => {
-					default_framebuffer.bind();
+					screen_state.default_framebuffer.bind();
 					gl::UseProgram(passthrough_shader);
-					gl::BindTexture(gl::TEXTURE_2D, ping_pong_fbos[0].texture);
+					gl::BindTexture(gl::TEXTURE_2D, screen_state.ping_pong_fbos[0].texture);
 					gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
 				}
 			}
