@@ -6,7 +6,8 @@ use gl::types::*;
 use std::os::raw::c_void;
 use std::{mem, ptr};
 
-type GlyphBrushVertexType = [f32; 16];
+const FLOATS_PER_GLYPH: usize = 32;
+type GlyphBrushVertexType = [f32; FLOATS_PER_GLYPH];
 
 fn insert_index_buffer_quad(index_buffer: &mut [u16], i: usize) {
 	index_buffer[i * 6] = 4 * i as u16;
@@ -45,10 +46,10 @@ fn glyph_vertex_transform(vertex: GlyphVertex) -> GlyphBrushVertexType {
 
 	//We need to return four vertices in screen space
 	[
-		left, bottom, texleft, texbottom,
-		right, bottom, texright, texbottom,
-		left, top, texleft, textop,
-		right, top, texright, textop
+		left, bottom, texleft, texbottom, vertex.extra.color[0], vertex.extra.color[1], vertex.extra.color[2], vertex.extra.color[3],
+		right, bottom, texright, texbottom, vertex.extra.color[0], vertex.extra.color[1], vertex.extra.color[2], vertex.extra.color[3],
+		left, top, texleft, textop, vertex.extra.color[0], vertex.extra.color[1], vertex.extra.color[2], vertex.extra.color[3],
+		right, top, texright, textop, vertex.extra.color[0], vertex.extra.color[1], vertex.extra.color[2], vertex.extra.color[3]
 	]	
 }
 
@@ -286,7 +287,7 @@ impl<'a> UIState<'a> {
 		match glyph_result.unwrap() {
 			BrushAction::Draw(verts) => {
 				if verts.len() > 0 {
-					let mut vertex_buffer = Vec::with_capacity(verts.len() * 16);
+					let mut vertex_buffer = Vec::with_capacity(verts.len() * FLOATS_PER_GLYPH);
 					let mut index_buffer = vec![0; verts.len() * 6];
 					for i in 0..verts.len() {
 						for v in verts[i].iter() {
@@ -298,13 +299,14 @@ impl<'a> UIState<'a> {
 					}
 					self.glyph_count = verts.len();
 
+					let attribute_strides = [2, 2, 4];
 					match self.glyph_vao {
 						Some(mut vao) => unsafe {
 							gl::DeleteVertexArrays(1, &mut vao);
-							self.glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &[2, 2]));
+							self.glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &attribute_strides));
 						}
 						None => unsafe {
-							self.glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &[2, 2]));
+							self.glyph_vao = Some(glutil::create_vertex_array_object(&vertex_buffer, &index_buffer, &attribute_strides));
 						}
 					}
 				} else {

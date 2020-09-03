@@ -983,7 +983,7 @@ fn main() {
 
 			//Apply the active image effect
 			match image_effect {
-				//TODO: This blur is horribly inefficient. Need to use a downscaled version of the FBO (mipmapping?) and fewer blur passes
+				//TODO: This blur is horribly inefficient. Need to use a downscaled version of the FBO (utilize mipmapping?) and fewer blur passes
 				ImageEffect::Blur => {
 					let passes = 8;
 					initialize_texture_samplers(passthrough_shader, &["image_texture"]);
