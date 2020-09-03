@@ -100,7 +100,8 @@ pub struct UIState<'a> {
     pub internals: UIInternals<'a>,
     pub glyph_texture: GLuint,
     pub glyph_vao: Option<GLuint>,
-    pub glyph_count: usize,
+	pub glyph_count: usize,
+	menu_chains: Vec<Vec<usize>>, //Array of array of menu ids used for nested menu traversal
     menus: Vec<Menu<'a>>
 }
 
@@ -130,16 +131,35 @@ impl<'a> UIState<'a> {
             internals: UIInternals::new(glyph_brush),
             glyph_texture,
             glyph_vao: None,
-            glyph_count: 0,
+			glyph_count: 0,
+			menu_chains: Vec::new(),
             menus
         }
     }
     
     pub fn add_section(&mut self, section: Section<'a>) -> usize { self.internals.add_section(section) } //Adds a standalone section to the UI
+	
+	pub fn append_to_chain(&mut self, chain: usize, dst: usize) {
+		//We only need to hide the current menu if there are more than zero menus in the chain
+		if self.menu_chains[chain].len() > 0 {
+			let src = self.menu_chains[chain][self.menu_chains[chain].len() - 1];
+			self.hide_menu(src);
+		}
+		self.show_menu(dst);
+		self.menu_chains[chain].push(dst);
+	}
 
     pub fn button_count(&self) -> usize { self.internals.buttons.count() }
 
-    pub fn delete_section(&mut self, index: usize) { self.internals.delete_section(index); }
+	pub fn create_menu_chain(&mut self, dst: usize) -> usize {
+		let mut chain = Vec::new();
+		chain.push(dst);
+		self.menu_chains.push(chain);
+		self.show_menu(dst);
+		self.menu_chains.len() - 1
+	}
+
+	pub fn delete_section(&mut self, index: usize) { self.internals.delete_section(index); }
 
     pub fn hide_all_menus(&mut self) {
         for menu in self.menus.iter_mut() {
@@ -147,7 +167,7 @@ impl<'a> UIState<'a> {
         }
     }
 
-    pub fn hide_menu(&mut self, index: usize) { self.menus[index].hide(&mut self.internals); }
+	pub fn hide_menu(&mut self, index: usize) { self.menus[index].hide(&mut self.internals); }
 
     //Clears the data in self.internals and marks all menus as inactive
     pub fn reset(&mut self) {
@@ -155,8 +175,20 @@ impl<'a> UIState<'a> {
         self.internals.sections.clear();
         for menu in self.menus.iter_mut() {
 			menu.active = false;
-        }
+		}
+		
+		for chain in self.menu_chains.iter_mut() {
+			chain.clear();
+		}
     }
+	
+	pub fn rollback_chain(&mut self, chain: usize) {
+		if let Some(index) = self.menu_chains[chain].pop() {
+			let dst = self.menu_chains[chain][self.menu_chains[chain].len() - 1];
+			self.hide_menu(index);
+			self.show_menu(dst);
+		}
+	}
 
 	pub fn show_menu(&mut self, index: usize) { self.menus[index].show(&mut self.internals); }
 
@@ -414,7 +446,7 @@ pub struct Menu<'a> {
     buttons: Vec<(&'a str, Option<Command>)>,
     anchor: UIAnchor,
     active: bool,
-    ids: Vec<usize>
+    ids: Vec<usize> //Indices into the buttons OptionVec. These are only valid when self.active == true
 }
 
 impl<'a> Menu<'a> {

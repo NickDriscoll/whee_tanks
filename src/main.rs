@@ -19,6 +19,7 @@ mod structs;
 mod input;
 mod ui;
 
+const WINDOWED_SIZE: (u32, u32) = (1920, 1080);
 const DEFAULT_TEX_PARAMS: [(GLenum, GLenum); 4] = [
 	(gl::TEXTURE_WRAP_S, gl::REPEAT),
 	(gl::TEXTURE_WRAP_T, gl::REPEAT),
@@ -109,12 +110,20 @@ pub fn submit_input_command(input: &Input, command_buffer: &mut Vec<Command>, bi
 	}
 }
 
-const WINDOWED_SIZE: (u32, u32) = (1920, 1080);
 fn main() {
 	let mut is_fullscreen = false;
-	let mut window_size = WINDOWED_SIZE;
-	let mut aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
 	let game_title = "Whee! Tanks! for ipad";
+
+	//Initialize some constant transforms
+	let view_from_world = glm::mat4(-1.0, 0.0, 0.0, 0.0,
+									 0.0, 1.0, 0.0, 0.0,
+									 0.0, 0.0, 1.0, 0.0,
+									 0.0, 0.0, 0.0, 1.0) * glm::look_at(&glm::vec3(0.0, 1.5, -1.0), &glm::vec3(0.0, 0.0, 0.0), &glm::vec3(0.0, 1.0, 0.0));
+	let world_from_view = glm::affine_inverse(view_from_world);
+	let world_space_look_direction = world_from_view * glm::vec4(0.0, 0.0, 1.0, 0.0);
+
+	//Variables that depend on screen size
+	let mut screen_state = ScreenState::new((1920, 1080), &view_from_world);
 
 	//Init glfw
 	let mut glfw = match glfw::init(glfw::FAIL_ON_ERRORS) {
@@ -127,7 +136,7 @@ fn main() {
 	glfw.window_hint(glfw::WindowHint::OpenGlDebugContext(true));
 
 	//Create window
-    let (mut window, events) = glfw.create_window(window_size.0, window_size.1, game_title, WindowMode::Windowed).unwrap();
+    let (mut window, events) = glfw.create_window(screen_state.window_size.0, screen_state.window_size.1, game_title, WindowMode::Windowed).unwrap();
 
 	//Make the window non-resizable
 	window.set_resizable(false);
@@ -162,8 +171,16 @@ fn main() {
 
 	//Framebuffers used for image effects
 	let mut ping_pong_fbos = unsafe {
-		let size = (window_size.0 as GLint, window_size.1 as GLint);
+		let size = (screen_state.window_size.0 as GLint, screen_state.window_size.1 as GLint);
 		[RenderTarget::new(size), RenderTarget::new(size)]
+	};
+
+	//Initialize default framebuffer
+	let mut default_framebuffer = Framebuffer {
+		name: 0,
+		size: (screen_state.window_size.0 as GLsizei, screen_state.window_size.1 as GLsizei),
+		clear_flags: gl::DEPTH_BUFFER_BIT | gl::COLOR_BUFFER_BIT,
+		cull_face: gl::BACK
 	};
 
 	//Screen filling triangle with uvs chosen such that the sampled image exactly covers the screen
@@ -174,14 +191,6 @@ fn main() {
 			-1.0, 3.0, 0.0, 2.0
 		];
 		glutil::create_vertex_array_object(&vs, &[0, 1, 2], &[2, 2])
-	};
-
-	//Initialize default framebuffer
-	let mut default_framebuffer = Framebuffer {
-		name: 0,
-		size: (window_size.0 as GLsizei, window_size.1 as GLsizei),
-		clear_flags: gl::DEPTH_BUFFER_BIT | gl::COLOR_BUFFER_BIT,
-		cull_face: gl::BACK
 	};
 
 	//Compile shader programs
@@ -330,15 +339,6 @@ fn main() {
 		b
 	};
 
-	//Initialize some constant transforms
-	let view_from_world = glm::mat4(-1.0, 0.0, 0.0, 0.0,
-								0.0, 1.0, 0.0, 0.0,
-								0.0, 0.0, 1.0, 0.0,
-								0.0, 0.0, 0.0, 1.0) * glm::look_at(&glm::vec3(0.0, 1.5, -1.0), &glm::vec3(0.0, 0.0, 0.0), &glm::vec3(0.0, 1.0, 0.0));
-	let world_from_view = glm::affine_inverse(view_from_world);
-	let ortho_size = 5.0;
-	let world_space_look_direction = world_from_view * glm::vec4(0.0, 0.0, 1.0, 0.0);
-
 	//Set up the light source
 	let sun_direction = glm::normalize(&glm::vec4(1.0, 1.0, -1.0, 0.0));
 
@@ -398,6 +398,7 @@ fn main() {
 		}
 	};
 
+	let ortho_size = 5.0;
 	let shadow_from_world = glm::mat4(-1.0, 0.0, 0.0, 0.0,
 									   0.0, 1.0, 0.0, 0.0,
 									   0.0, 0.0, 1.0, 0.0,
@@ -410,29 +411,22 @@ fn main() {
 	};
 	let mut glyph_brush = GlyphBrushBuilder::using_font(font).build();
 
-	//Variables that depend on screen size
-	let mut clipping_from_view = glm::ortho(-ortho_size*aspect_ratio, ortho_size*aspect_ratio, -ortho_size, ortho_size, -ortho_size, ortho_size * 2.0);
-	let mut clipping_from_world = clipping_from_view * view_from_world;
-	let mut world_from_clipping = glm::affine_inverse(clipping_from_world);
-	//Transfrom from GLFW screen space to clipping space
-	let mut clipping_from_screen = glm::mat4(
-		2.0 / window_size.0 as f32, 0.0, 0.0, -1.0,
-		0.0, -(2.0 / window_size.1 as f32), 0.0, 1.0,
-		0.0, 0.0, 1.0, 0.0,
-		0.0, 0.0, 0.0, 1.0
-	);
-
 	//Mouse state
-	let mut world_space_mouse = world_from_clipping * glm::vec4(0.0, 0.0, 0.0, 1.0);
+	let mut world_space_mouse = screen_state.world_from_clipping * glm::vec4(0.0, 0.0, 0.0, 1.0);
 	let mut screen_space_mouse = glm::vec2(0.0, 0.0);
 	let mut mouse_lbutton_pressed = false;
 	let mut last_mouse_lbutton_pressed = false;
 
-	//Data structure of all UI state
+	//Hardcoded menu indices
 	let main_menu_index = 0;
 	let pause_menu_index = 1;
 	let dev_menu_index = 2;
 	let settings_menu_index = 3;
+
+	//Hardcoded menu chain indices
+	let main_menu_chain_index = 0;
+
+	//Data structure of all UI state
 	let mut ui_state = {
 		let mut menus = Vec::new();
 		
@@ -441,10 +435,10 @@ fn main() {
 			vec![
 				("Singleplayer", Some(Command::StartPlaying)),
 				("Multiplayer", None),
-				("Settings", Some(Command::GoToMenu(main_menu_index, settings_menu_index))),
+				("Settings", Some(Command::AppendToMenuChain(main_menu_chain_index, settings_menu_index))),
 				("Exit", Some(Command::Quit)),
 			],
-			UIAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
+			UIAnchor::CenterAligned(screen_state.window_size.0 as f32 / 2.0, screen_state.window_size.1 as f32 / 3.0)
 		);
 		menus.push(menu);
 
@@ -452,11 +446,11 @@ fn main() {
 		let menu = Menu::new(
 			vec![
 				("Resume", Some(Command::UnPauseGame)),
-				//("Settings", Some(Command::GoToMenu(pause_menu_index, settings_menu_index))),
+				("Settings", Some(Command::AppendToMenuChain(main_menu_chain_index, settings_menu_index))),
 				("Main Menu", Some(Command::ReturnToMainMenu)),
 				("Exit", Some(Command::Quit)),
 			],
-			UIAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
+			UIAnchor::CenterAligned(screen_state.window_size.0 as f32 / 2.0, screen_state.window_size.1 as f32 / 3.0)
 		);
 		menus.push(menu);
 
@@ -473,15 +467,16 @@ fn main() {
 		let menu = Menu::new(
 			vec![
 				("Toggle fullscreen", Some(Command::ToggleFullScreen)),
-				("Back", Some(Command::GoToMenu(settings_menu_index, main_menu_index))),
+				("Back", Some(Command::MenuChainRollback(main_menu_chain_index))),
 			],
-			UIAnchor::CenterAligned(window_size.0 as f32 / 2.0, window_size.1 as f32 / 3.0)
+			UIAnchor::CenterAligned(screen_state.window_size.0 as f32 / 2.0, screen_state.window_size.1 as f32 / 3.0)
 		);
 		menus.push(menu);
 
-		UIState::new(menus, &mut glyph_brush)
+		let mut state = UIState::new(menus, &mut glyph_brush);
+		state.create_menu_chain(main_menu_index);
+		state
 	};
-	ui_state.show_menu(main_menu_index);
 
 	//Title text
 	let mut title_section = {
@@ -493,7 +488,7 @@ fn main() {
 	
 		let bounding_box = ui_state.internals.glyph_brush.glyph_bounds(&section).unwrap();
 		section.screen_position = (
-			window_size.0 as f32 / 2.0 - bounding_box.width() / 2.0,
+			screen_state.window_size.0 as f32 / 2.0 - bounding_box.width() / 2.0,
 			40.0
 		);
 		section
@@ -583,8 +578,8 @@ fn main() {
 				WindowEvent::CursorPos(x, y) => {
 					screen_space_mouse = glm::vec2(x as f32, y as f32);
 					//We have to flip the y coordinate because glfw thinks (0, 0) is in the top left
-					let clipping_space_mouse = glm::vec4(x as f32 / (window_size.0 as f32 / 2.0) - 1.0, -(y as f32 / (window_size.1 as f32 / 2.0) - 1.0), 0.0, 1.0);
-					world_space_mouse = world_from_clipping * clipping_space_mouse;
+					let clipping_space_mouse = glm::vec4(x as f32 / (screen_state.window_size.0 as f32 / 2.0) - 1.0, -(y as f32 / (screen_state.window_size.1 as f32 / 2.0) - 1.0), 0.0, 1.0);
+					world_space_mouse = screen_state.world_from_clipping * clipping_space_mouse;
 				}
                 _ => {}
             }
@@ -600,20 +595,15 @@ fn main() {
 				Command::ToggleWireframe => { is_wireframe = !is_wireframe; }
 				Command::ToggleFullScreen => {
 					if is_fullscreen {
-						window_size = WINDOWED_SIZE;
-						aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
-						//window.set_size(window_size.0 as i32, window_size.1 as i32);
-						window.set_monitor(WindowMode::Windowed, 200, 200, window_size.0, window_size.1, Some(144));
-
+						screen_state = ScreenState::new(WINDOWED_SIZE, &view_from_world);
+						window.set_monitor(WindowMode::Windowed, 200, 200, screen_state.window_size.0, screen_state.window_size.1, Some(144));
 					} else {
 						glfw.with_primary_monitor_mut(|_, opt_monitor| {
 							if let Some(monitor) = opt_monitor {
 								let pos = monitor.get_pos();
 								if let Some(mode) = monitor.get_video_mode() {
-									window_size = (mode.width, mode.height);
-									aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
-									//window.set_size(window_size.0 as i32, window_size.1 as i32);
-									window.set_monitor(WindowMode::FullScreen(monitor), pos.0, pos.1, window_size.0, window_size.1, Some(144));
+									screen_state = ScreenState::new((mode.width, mode.height), &view_from_world);
+									window.set_monitor(WindowMode::FullScreen(monitor), pos.0, pos.1, screen_state.window_size.0, screen_state.window_size.1, Some(144));
 								}
 							}
 						});
@@ -622,27 +612,21 @@ fn main() {
 
 					//Update the variables that depend on screen size
 					unsafe {
-						ping_pong_fbos[0].resize(window_size);
-						ping_pong_fbos[1].resize(window_size);
+						for fbo in ping_pong_fbos.iter_mut() {
+							fbo.resize(screen_state.window_size);
+						}
 					}
-					default_framebuffer.size = (window_size.0 as GLsizei, window_size.1 as GLsizei);
-					ui_state.update_screen_size(window_size);
+					default_framebuffer.size = (screen_state.window_size.0 as GLsizei, screen_state.window_size.1 as GLsizei);
+
+					//Update the UI elements that depend on screen size
+					ui_state.update_screen_size(screen_state.window_size);
 					let bounding_box = ui_state.internals.glyph_brush.glyph_bounds(&title_section).unwrap();
 					title_section.screen_position = (
-						window_size.0 as f32 / 2.0 - bounding_box.width() / 2.0,
+						screen_state.window_size.0 as f32 / 2.0 - bounding_box.width() / 2.0,
 						40.0
 					);
 					ui_state.delete_section(title_section_index);
 					title_section_index = ui_state.add_section(title_section.clone());
-					clipping_from_view = glm::ortho(-ortho_size*aspect_ratio, ortho_size*aspect_ratio, -ortho_size, ortho_size, -ortho_size, ortho_size * 2.0);
-					clipping_from_world = clipping_from_view * view_from_world;
-					world_from_clipping = glm::affine_inverse(clipping_from_world);
-					clipping_from_screen = glm::mat4(
-						2.0 / window_size.0 as f32, 0.0, 0.0, -1.0,
-						0.0, -2.0 / window_size.1 as f32, 0.0, 1.0,
-						0.0, 0.0, 1.0, 0.0,
-						0.0, 0.0, 0.0, 1.0
-					);
 				}
 				Command::MoveForwards => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
@@ -691,7 +675,7 @@ fn main() {
 					}
 					
 					//Enable the pause menu
-					ui_state.show_menu(pause_menu_index);
+					ui_state.append_to_chain(main_menu_chain_index, pause_menu_index);
 					title_section_index = ui_state.add_section(title_section.clone());
 	
 					game_state.kind = GameStateKind::Paused;
@@ -702,10 +686,6 @@ fn main() {
 				}
 				Command::UnPauseGame => {
 					//Hide UI
-					/*
-					ui_state.hide_menu(pause_menu_index);
-					ui_state.delete_section(title_section_index);
-					*/
 					ui_state.reset();
 					game_state.kind = GameStateKind::Playing;							
 					image_effect = ImageEffect::None;
@@ -758,7 +738,7 @@ fn main() {
 					//Reset UI state
 					ui_state.reset();
 					title_section_index = ui_state.add_section(title_section.clone());
-					ui_state.show_menu(main_menu_index);
+					ui_state.append_to_chain(main_menu_chain_index, main_menu_index);
 
 					image_effect = ImageEffect::None;
 					game_state.kind = GameStateKind::MainMenu;
@@ -771,9 +751,11 @@ fn main() {
 				Command::ToggleMenu(index) => {
 					ui_state.toggle_menu(index);
 				}
-				Command::GoToMenu(src, dst) => {
-					ui_state.hide_menu(src);
-					ui_state.show_menu(dst);
+				Command::AppendToMenuChain(chain, dst) => {
+					ui_state.append_to_chain(chain, dst);
+				}
+				Command::MenuChainRollback(chain) => {
+					ui_state.rollback_chain(chain);
 				}
 			}
 		}
@@ -967,7 +949,7 @@ fn main() {
 
 			//Render static pieces of the arena
 			for piece in arena_pieces.iter() {
-				glutil::bind_matrix4(mapped_shader, "mvp", &(clipping_from_world * piece.model_matrix));
+				glutil::bind_matrix4(mapped_shader, "mvp", &(screen_state.clipping_from_world * piece.model_matrix));
 				glutil::bind_matrix4(mapped_shader, "model_matrix", &piece.model_matrix);
 				bind_texture_maps(&[piece.albedo, piece.normal]);
 
@@ -981,7 +963,7 @@ fn main() {
 				if let Some(tank) = &tanks[i] {
 					for j in 0..tank.skeleton.node_list.len() {
 						let node_index = tank.skeleton.node_list[j];
-						glutil::bind_matrix4(mapped_shader, "mvp", &(clipping_from_world * tank.bones[node_index].transform));
+						glutil::bind_matrix4(mapped_shader, "mvp", &(screen_state.clipping_from_world * tank.bones[node_index].transform));
 						glutil::bind_matrix4(mapped_shader, "model_matrix", &tank.bones[node_index].transform);
 						bind_texture_maps(&[tank.skeleton.albedo_maps[j], tank.skeleton.normal_maps[j], tank.skeleton.roughness_maps[j]]);
 		
@@ -1010,7 +992,7 @@ fn main() {
 				gl::ActiveTexture(gl::TEXTURE0 + i as GLenum);
 				gl::BindTexture(gl::TEXTURE_2D, shell_mesh.texture_maps[i]);
 			}
-			glutil::bind_matrix4(mapped_instanced_shader, "view_projection", &clipping_from_world);
+			glutil::bind_matrix4(mapped_instanced_shader, "view_projection", &screen_state.clipping_from_world);
 			gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
 
 			//-----------Apply post-processing effects-----------
@@ -1056,7 +1038,7 @@ fn main() {
 
 			//Render UI buttons
 			if let Some(vao) = ui_state.buttons_vao {
-				draw_ui_elements(vao, ui_shader, ui_state.button_count(), &clipping_from_screen);
+				draw_ui_elements(vao, ui_shader, ui_state.button_count(), &screen_state.clipping_from_screen);
 			}
 
 			//Render text
@@ -1065,7 +1047,7 @@ fn main() {
 				gl::ActiveTexture(gl::TEXTURE0);
 				gl::BindTexture(gl::TEXTURE_2D, ui_state.glyph_texture);
 
-				draw_ui_elements(vao, glyph_shader, ui_state.glyph_count, &clipping_from_screen);
+				draw_ui_elements(vao, glyph_shader, ui_state.glyph_count, &screen_state.clipping_from_screen);
 			}
 		}
 

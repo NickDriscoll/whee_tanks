@@ -18,7 +18,7 @@ pub struct StaticGeometry {
 //Something too simple for a skeleton
 pub struct SimpleMesh {
     pub vao: GLuint,
-    pub texture_maps: [GLuint; 3],
+    pub texture_maps: [GLuint; 3],      //[albedo, normal, roughness]
     pub index_count: GLint
 }
 
@@ -319,4 +319,39 @@ pub enum GameStateKind {
 pub enum ImageEffect {
     Blur,
     None
+}
+
+pub struct ScreenState {
+    pub window_size: (u32, u32),
+    pub aspect_ratio: f32,
+    pub clipping_from_view: glm::TMat4<f32>,
+    pub clipping_from_world: glm::TMat4<f32>,
+    pub world_from_clipping: glm::TMat4<f32>,
+    pub clipping_from_screen: glm::TMat4<f32>
+}
+
+impl ScreenState {
+    const ORTHO_SIZE: f32 = 5.0;
+
+    pub fn new(window_size: (u32, u32), view_from_world: &glm::TMat4<f32>) -> Self {
+        let aspect_ratio = window_size.0 as f32 / window_size.1 as f32;
+        let clipping_from_view = glm::ortho(-Self::ORTHO_SIZE*aspect_ratio, Self::ORTHO_SIZE*aspect_ratio, -Self::ORTHO_SIZE, Self::ORTHO_SIZE, -Self::ORTHO_SIZE, Self::ORTHO_SIZE * 2.0);
+        let clipping_from_world = clipping_from_view * view_from_world;
+        let world_from_clipping = glm::affine_inverse(clipping_from_world);
+        let clipping_from_screen = glm::mat4(
+            2.0 / window_size.0 as f32, 0.0, 0.0, -1.0,
+            0.0, -(2.0 / window_size.1 as f32), 0.0, 1.0,
+            0.0, 0.0, 1.0, 0.0,
+            0.0, 0.0, 0.0, 1.0
+        );
+
+        ScreenState {
+            window_size,
+            aspect_ratio,
+            clipping_from_view,
+            clipping_from_world,
+            world_from_clipping,
+            clipping_from_screen
+        }
+    }
 }
