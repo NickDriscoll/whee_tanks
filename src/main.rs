@@ -508,20 +508,20 @@ fn main() {
 
 			map.insert((InputKind::Key(Key::Escape), Action::Press), Command::PauseGame);
 			map.insert((InputKind::Key(Key::Q), Action::Press), Command::ToggleWireframe);
-			map.insert((InputKind::Key(Key::W), Action::Press), Command::MoveTank(-Tank::SPEED));
-			map.insert((InputKind::Key(Key::S), Action::Press), Command::MoveTank(Tank::SPEED));
-			map.insert((InputKind::Key(Key::A), Action::Press), Command::RotateTank(-Tank::ROTATION_SPEED));
-			map.insert((InputKind::Key(Key::D), Action::Press), Command::RotateTank(Tank::ROTATION_SPEED));
+			map.insert((InputKind::Key(Key::W), Action::Press), Command::MovePlayerTank(-Tank::SPEED));
+			map.insert((InputKind::Key(Key::S), Action::Press), Command::MovePlayerTank(Tank::SPEED));
+			map.insert((InputKind::Key(Key::A), Action::Press), Command::RotatePlayerTank(-Tank::ROTATION_SPEED));
+			map.insert((InputKind::Key(Key::D), Action::Press), Command::RotatePlayerTank(Tank::ROTATION_SPEED));
 			map.insert((InputKind::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
 			
 			#[cfg(dev_tools)]
 			map.insert((InputKind::Key(Key::GraveAccent), Action::Press), Command::ToggleMenu(dev_menu_index));
 
 			//The keys here depend on the earlier bindings
-			map.insert((InputKind::Key(Key::W), Action::Release), Command::MoveTank(Tank::SPEED));
-			map.insert((InputKind::Key(Key::S), Action::Release), Command::MoveTank(-Tank::SPEED));
-			map.insert((InputKind::Key(Key::A), Action::Release), Command::RotateTank(Tank::ROTATION_SPEED));
-			map.insert((InputKind::Key(Key::D), Action::Release), Command::RotateTank(-Tank::ROTATION_SPEED));		
+			map.insert((InputKind::Key(Key::W), Action::Release), Command::MovePlayerTank(Tank::SPEED));
+			map.insert((InputKind::Key(Key::S), Action::Release), Command::MovePlayerTank(-Tank::SPEED));
+			map.insert((InputKind::Key(Key::A), Action::Release), Command::RotatePlayerTank(Tank::ROTATION_SPEED));
+			map.insert((InputKind::Key(Key::D), Action::Release), Command::RotatePlayerTank(-Tank::ROTATION_SPEED));		
 
 			map
 		};
@@ -616,13 +616,12 @@ fn main() {
 					ui_state.delete_section(title_section_index);
 					title_section_index = ui_state.add_section(title_section.clone());
 				}
-				Command::MoveTank(speed) => {
+				Command::MovePlayerTank(speed) => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
 						tank.speed += speed;
 					}
-
 				}
-				Command::RotateTank(speed) => {
+				Command::RotatePlayerTank(speed) => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
 						tank.rotating += speed;
 					}
@@ -963,17 +962,18 @@ fn main() {
 			match image_effect {
 				//TODO: This blur is horribly inefficient. Need to use a downscaled version of the FBO (utilize mipmapping?) and fewer blur passes
 				ImageEffect::Blur => {
-					let passes = 8;
+					let passes = 1;
 					initialize_texture_samplers(passthrough_shader, &["image_texture"]);
 					initialize_texture_samplers(gaussian_shader, &["image_texture"]);
 	
 					gl::UseProgram(gaussian_shader);
 					for _ in 0..passes {
-						//Do a horizontal pass followed by a vertical one. This reduces complexity from N^2 to 2N
+						//Do a horizontal pass followed by a vertical one. This reduces the necessary texture accesses from N^2 to 2N
 						for i in 0..screen_state.ping_pong_fbos.len() {
 							screen_state.ping_pong_fbos[i ^ 1].bind();
-							gl::BindTexture(gl::TEXTURE_2D, screen_state.ping_pong_fbos[i].texture);
-							glutil::bind_int(gaussian_shader, "horizontal", i as GLint ^ 1);		//Flag if this is a horizontal or vertical blur pass
+							gl::BindTexture(gl::TEXTURE_2D, screen_state.ping_pong_fbos[i].texture);							
+							gl::GenerateMipmap(gl::TEXTURE_2D);											//Gen mipmaps so we can source from the downscaled image
+							glutil::bind_int(gaussian_shader, "horizontal", i as GLint ^ 1);			//Flag if this is a horizontal or vertical blur pass
 							gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
 						}
 					}

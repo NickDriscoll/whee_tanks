@@ -16,7 +16,7 @@ vec3 do_blur(vec2 texel_size) {
     vec3 result = vec3(0.0);
     for (int i = -BOUND; i <= BOUND; i++) {
         float weight = GAUSSIAN_WEIGHTS[abs(i)];
-        vec3 sample = texture(image_texture, f_uvs + i * unit_uv_offset * texel_size).xyz;
+        vec3 sample = textureLod(image_texture, f_uvs + i * unit_uv_offset * texel_size, 2).xyz;
         result += sample * weight;
     }
     return result;
