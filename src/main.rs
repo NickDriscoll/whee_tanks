@@ -36,7 +36,6 @@ unsafe fn bind_texture_maps(maps: &[GLuint]) {
 }
 
 unsafe fn initialize_texture_samplers(program: GLuint, identifiers: &[&str]) {
-	gl::UseProgram(program);
 	for i in 0..identifiers.len() {
 		glutil::bind_int(program, identifiers[i], i as GLint);
 	}
@@ -133,6 +132,8 @@ fn main() {
 
 	glfw.window_hint(glfw::WindowHint::ContextVersion(4, 3));
 	glfw.window_hint(glfw::WindowHint::OpenGlProfile(glfw::OpenGlProfileHint::Core));
+
+	#[cfg(gloutput)]
 	glfw.window_hint(glfw::WindowHint::OpenGlDebugContext(true));
 
 	//Create window
@@ -592,7 +593,8 @@ fn main() {
 			match command {
 				Command::Quit => { window.set_should_close(true); }
 				Command::ToggleWireframe => { is_wireframe = !is_wireframe; }
-				Command::ToggleFullScreen => {
+				Command::ToggleFullScreen => {					
+					//Get a fresh 3D render this frame
 					snapshot_frame = frame_count;
 
 					if is_fullscreen {
@@ -632,7 +634,9 @@ fn main() {
 					}
 				}
 				Command::PauseGame => {
+					//Get a fresh 3D render this frame
 					snapshot_frame = frame_count;
+
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
 						tank.speed = 0.0;
 						tank.rotating = 0.0;
@@ -684,7 +688,10 @@ fn main() {
 					//Start the music
 					if let Some(sink) = &bgm_sink {
 						if sink.empty() {
-							let file = File::open(bgm_path).unwrap();
+							let file = match File::open(bgm_path) {
+								Ok(f) => { f }
+								Err(e) => {	panic!("Couldn't play \"{}\":\n{}", bgm_path, e); }
+							};
 							let source = rodio::Decoder::new(BufReader::new(file)).unwrap();
 							sink.append(source);
 							sink.set_volume(bgm_volume);
@@ -695,6 +702,7 @@ fn main() {
 					}
 				}
 				Command::ReturnToMainMenu => {
+					//Get a fresh 3D render this frame
 					snapshot_frame = frame_count;
 
 					//Reset game state
@@ -1008,7 +1016,7 @@ fn main() {
 				gl::BindVertexArray(postprocessing_vao);				//Bind the VAO that just defines a screen-filling triangle
 				gl::ActiveTexture(gl::TEXTURE0);
 
-				//Run the render through the passthrough shader
+				//Run the cached render through the passthrough shader
 				screen_state.default_framebuffer.bind();
 				gl::UseProgram(passthrough_shader);
 				gl::BindTexture(gl::TEXTURE_2D, screen_state.ping_pong_fbos[0].texture);
