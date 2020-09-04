@@ -333,9 +333,12 @@ fn main() {
 
 	//Frame timing data
 	let mut last_frame_instant = Instant::now();
-	let mut elapsed_time = 0.0;
+	let mut frame_count = 0;
+	let mut snapshot_frame = 0;	//The frame on which the cached 3D render will be re-rendered
+	let mut elapsed_time = 0.0;	//This only increments when the game is actually playing
 
 	let mut is_wireframe = false;
+	let mut use_cached_3D_render = false;
 
 	//Each frame this is filled with Commands, then drained when processed
 	let mut command_buffer = Vec::new();
@@ -458,6 +461,7 @@ fn main() {
 		{
 			let menu = Menu::new(
 				vec![
+					("Toggle wireframe", Some(Command::ToggleWireframe)),
 					("Toggle collision volumes", None)
 				],
 				UIAnchor::LeftAligned(20.0, 20.0)
@@ -488,7 +492,7 @@ fn main() {
 	let mut title_section_index = ui_state.add_section(title_section.clone());
 
 	//Background music data
-	let bgm_path = "music/factory.mp3";
+	let bgm_path = "music/relaxing_botw.mp3";
 	let bgm_volume = 0.5;
 	let bgm_sink = match rodio::default_output_device() {
 		Some(device) => {
@@ -507,7 +511,6 @@ fn main() {
 			let mut map = HashMap::new();
 
 			map.insert((InputKind::Key(Key::Escape), Action::Press), Command::PauseGame);
-			map.insert((InputKind::Key(Key::Q), Action::Press), Command::ToggleWireframe);
 			map.insert((InputKind::Key(Key::W), Action::Press), Command::MovePlayerTank(-Tank::SPEED));
 			map.insert((InputKind::Key(Key::S), Action::Press), Command::MovePlayerTank(Tank::SPEED));
 			map.insert((InputKind::Key(Key::A), Action::Press), Command::RotatePlayerTank(-Tank::ROTATION_SPEED));
@@ -590,6 +593,8 @@ fn main() {
 				Command::Quit => { window.set_should_close(true); }
 				Command::ToggleWireframe => { is_wireframe = !is_wireframe; }
 				Command::ToggleFullScreen => {
+					snapshot_frame = frame_count;
+
 					if is_fullscreen {
 						screen_state = ScreenState::new(WINDOWED_SIZE, &view_from_world);
 						window.set_monitor(WindowMode::Windowed, 200, 200, screen_state.window_size.0, screen_state.window_size.1, Some(144));
@@ -627,6 +632,7 @@ fn main() {
 					}
 				}
 				Command::PauseGame => {
+					snapshot_frame = frame_count;
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
 						tank.speed = 0.0;
 						tank.rotating = 0.0;
@@ -689,6 +695,8 @@ fn main() {
 					}
 				}
 				Command::ReturnToMainMenu => {
+					snapshot_frame = frame_count;
+
 					//Reset game state
 					tanks.clear();
 					shells.clear();
@@ -722,6 +730,7 @@ fn main() {
 		match game_state.kind {
 			GameStateKind::Playing => {
 				elapsed_time += delta_time;
+				use_cached_3D_render = false;
 
 				let mut player_origin = glm::vec4(0.0, 0.0, 0.0, 1.0);
 				if let Some(tank) = &tanks[player_tank_id] {
@@ -835,8 +844,8 @@ fn main() {
 					}
 				}
 			}
-			GameStateKind::MainMenu => {}
-			GameStateKind::Paused => {}
+			GameStateKind::MainMenu => { use_cached_3D_render = frame_count != snapshot_frame; }
+			GameStateKind::Paused => { use_cached_3D_render = frame_count != snapshot_frame; }
 		}
 		last_mouse_lbutton_pressed = mouse_lbutton_pressed;
 
@@ -848,151 +857,165 @@ fn main() {
 
 		//Rendering
 		unsafe {
-			//Enable depth testing for 3D scene drawing
-			gl::Enable(gl::DEPTH_TEST);
+			//Check if we're going to reuse last frame's 3D render
+			if !use_cached_3D_render {
+				//Enable depth testing for 3D scene drawing
+				gl::Enable(gl::DEPTH_TEST);
 
-			//-----------Shadow map rendering-----------
+				//-----------Shadow map rendering-----------
 
-			//Bind shadowmap fbo
-			shadow_rendertarget.bind();
+				//Bind shadowmap fbo
+				shadow_rendertarget.bind();
 
-			//Bind shadow program
-			gl::UseProgram(shadow_shader);
+				//Bind shadow program
+				gl::UseProgram(shadow_shader);
 
-			//Render arena pieces
-			for piece in arena_pieces.iter() {
-				gl::BindVertexArray(piece.vao);
-				glutil::bind_matrix4(shadow_shader, "mvp", &(shadow_projection * shadow_from_world * piece.model_matrix));
-				gl::DrawElements(gl::TRIANGLES, piece.index_count, gl::UNSIGNED_SHORT, ptr::null());
-			}
-
-			//Render tanks
-			gl::BindVertexArray(tank_skeleton.vao);
-			for i in 0..tanks.len() {
-				if let Some(tank) = &tanks[i] {
-					for j in 0..tank.skeleton.node_list.len() {
-						let node_index = tank.skeleton.node_list[j];
-						glutil::bind_matrix4(shadow_shader, "mvp", &(shadow_projection * shadow_from_world * tank.bones[node_index].transform));
-
-						tank.skeleton.draw_bone(j);
-					}
+				//Render arena pieces
+				for piece in arena_pieces.iter() {
+					gl::BindVertexArray(piece.vao);
+					glutil::bind_matrix4(shadow_shader, "mvp", &(shadow_projection * shadow_from_world * piece.model_matrix));
+					gl::DrawElements(gl::TRIANGLES, piece.index_count, gl::UNSIGNED_SHORT, ptr::null());
 				}
-			}
 
-			//Render shells
-			gl::UseProgram(shadow_shader_instanced);
-			gl::BindVertexArray(shell_mesh.vao);
-			glutil::bind_matrix4(shadow_shader_instanced, "view_projection", &(shadow_projection * shadow_from_world));
-			gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
+				//Render tanks
+				gl::BindVertexArray(tank_skeleton.vao);
+				for i in 0..tanks.len() {
+					if let Some(tank) = &tanks[i] {
+						for j in 0..tank.skeleton.node_list.len() {
+							let node_index = tank.skeleton.node_list[j];
+							glutil::bind_matrix4(shadow_shader, "mvp", &(shadow_projection * shadow_from_world * tank.bones[node_index].transform));
 
-			//-----------Main scene rendering-----------
-
-			//Bind first ping-pong fbo
-			screen_state.ping_pong_fbos[0].bind();
-			
-			//Set polygon fill mode
-			if is_wireframe { gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE); }
-			else { gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL); }
-
-			//Bind program for texture-mapped objects
-			gl::UseProgram(mapped_shader);
-
-			//Set uniforms that are constant for the lifetime of the program
-			initialize_texture_samplers(mapped_shader, &TEXTURE_MAP_IDENTIFIERS);
-			glutil::bind_matrix4(mapped_shader, "shadow_matrix", &(shadow_projection * shadow_from_world));
-			glutil::bind_vector4(mapped_shader, "sun_direction", &sun_direction);
-			
-			gl::ActiveTexture(gl::TEXTURE3);
-			gl::BindTexture(gl::TEXTURE_2D, shadow_rendertarget.texture);
-
-			//Render static pieces of the arena
-			for piece in arena_pieces.iter() {
-				glutil::bind_matrix4(mapped_shader, "mvp", &(screen_state.clipping_from_world * piece.model_matrix));
-				glutil::bind_matrix4(mapped_shader, "model_matrix", &piece.model_matrix);
-				bind_texture_maps(&[piece.albedo, piece.normal]);
-
-				gl::BindVertexArray(piece.vao);
-				gl::DrawElements(gl::TRIANGLES, piece.index_count, gl::UNSIGNED_SHORT, ptr::null());
-			}
-
-			//Render the tanks
-			gl::BindVertexArray(tank_skeleton.vao);
-			for i in 0..tanks.len() {
-				if let Some(tank) = &tanks[i] {
-					for j in 0..tank.skeleton.node_list.len() {
-						let node_index = tank.skeleton.node_list[j];
-						glutil::bind_matrix4(mapped_shader, "mvp", &(screen_state.clipping_from_world * tank.bones[node_index].transform));
-						glutil::bind_matrix4(mapped_shader, "model_matrix", &tank.bones[node_index].transform);
-						bind_texture_maps(&[tank.skeleton.albedo_maps[j], tank.skeleton.normal_maps[j], tank.skeleton.roughness_maps[j]]);
-		
-						tank.skeleton.draw_bone(j);						
-					}
-				}
-			}
-
-			//Render tank shells
-			gl::UseProgram(mapped_instanced_shader);
-
-			//Set texture sampler values
-			initialize_texture_samplers(mapped_instanced_shader, &TEXTURE_MAP_IDENTIFIERS);
-			glutil::bind_matrix4(mapped_instanced_shader, "shadow_matrix", &(shadow_projection * shadow_from_world));
-			glutil::bind_vector4(mapped_instanced_shader, "sun_direction", &sun_direction);
-
-			//Bind the shadow map's data
-			gl::ActiveTexture(gl::TEXTURE3);
-			gl::BindTexture(gl::TEXTURE_2D, shadow_rendertarget.texture);
-
-			//Bind the vertex array
-			gl::BindVertexArray(shell_mesh.vao);
-
-			//Bind the texture maps
-			for i in 0..shell_mesh.texture_maps.len() {
-				gl::ActiveTexture(gl::TEXTURE0 + i as GLenum);
-				gl::BindTexture(gl::TEXTURE_2D, shell_mesh.texture_maps[i]);
-			}
-			glutil::bind_matrix4(mapped_instanced_shader, "view_projection", &screen_state.clipping_from_world);
-			gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
-
-			//-----------Apply post-processing effects-----------
-			gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);			//Disable wireframe rendering for this section if it was enabled
-			gl::BindVertexArray(postprocessing_vao);				//Bind the VAO that just defines a screen-filling triangle
-			gl::ActiveTexture(gl::TEXTURE0);
-
-			//Apply the active image effect
-			match image_effect {
-				//TODO: This blur is horribly inefficient. Need to use a downscaled version of the FBO (utilize mipmapping?) and fewer blur passes
-				ImageEffect::Blur => {
-					let passes = 1;
-					initialize_texture_samplers(passthrough_shader, &["image_texture"]);
-					initialize_texture_samplers(gaussian_shader, &["image_texture"]);
-	
-					gl::UseProgram(gaussian_shader);
-					for _ in 0..passes {
-						//Do a horizontal pass followed by a vertical one. This reduces the necessary texture accesses from N^2 to 2N
-						for i in 0..screen_state.ping_pong_fbos.len() {
-							screen_state.ping_pong_fbos[i ^ 1].bind();
-							gl::BindTexture(gl::TEXTURE_2D, screen_state.ping_pong_fbos[i].texture);							
-							gl::GenerateMipmap(gl::TEXTURE_2D);											//Gen mipmaps so we can source from the downscaled image
-							glutil::bind_int(gaussian_shader, "horizontal", i as GLint ^ 1);			//Flag if this is a horizontal or vertical blur pass
-							gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
+							tank.skeleton.draw_bone(j);
 						}
 					}
-	
-					//Render result to the default framebuffer
-					screen_state.default_framebuffer.bind();
-					gl::UseProgram(passthrough_shader);
-					gl::BindTexture(gl::TEXTURE_2D, screen_state.ping_pong_fbos[0].texture);
-					gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
 				}
-				ImageEffect::None => {
-					screen_state.default_framebuffer.bind();
-					gl::UseProgram(passthrough_shader);
-					gl::BindTexture(gl::TEXTURE_2D, screen_state.ping_pong_fbos[0].texture);
-					gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
+
+				//Render shells
+				gl::UseProgram(shadow_shader_instanced);
+				gl::BindVertexArray(shell_mesh.vao);
+				glutil::bind_matrix4(shadow_shader_instanced, "view_projection", &(shadow_projection * shadow_from_world));
+				gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
+
+				//-----------Main scene rendering-----------
+
+				//Bind first ping-pong fbo
+				screen_state.ping_pong_fbos[0].bind();
+				
+				//Set polygon fill mode
+				if is_wireframe { gl::PolygonMode(gl::FRONT_AND_BACK, gl::LINE); }
+				else { gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL); }
+
+				//Bind program for texture-mapped objects
+				gl::UseProgram(mapped_shader);
+
+				//Set uniforms that are constant for the lifetime of the program
+				initialize_texture_samplers(mapped_shader, &TEXTURE_MAP_IDENTIFIERS);
+				glutil::bind_matrix4(mapped_shader, "shadow_matrix", &(shadow_projection * shadow_from_world));
+				glutil::bind_vector4(mapped_shader, "sun_direction", &sun_direction);
+				
+				gl::ActiveTexture(gl::TEXTURE3);
+				gl::BindTexture(gl::TEXTURE_2D, shadow_rendertarget.texture);
+
+				//Render static pieces of the arena
+				for piece in arena_pieces.iter() {
+					glutil::bind_matrix4(mapped_shader, "mvp", &(screen_state.clipping_from_world * piece.model_matrix));
+					glutil::bind_matrix4(mapped_shader, "model_matrix", &piece.model_matrix);
+					bind_texture_maps(&[piece.albedo, piece.normal]);
+
+					gl::BindVertexArray(piece.vao);
+					gl::DrawElements(gl::TRIANGLES, piece.index_count, gl::UNSIGNED_SHORT, ptr::null());
 				}
+
+				//Render the tanks
+				gl::BindVertexArray(tank_skeleton.vao);
+				for i in 0..tanks.len() {
+					if let Some(tank) = &tanks[i] {
+						for j in 0..tank.skeleton.node_list.len() {
+							let node_index = tank.skeleton.node_list[j];
+							glutil::bind_matrix4(mapped_shader, "mvp", &(screen_state.clipping_from_world * tank.bones[node_index].transform));
+							glutil::bind_matrix4(mapped_shader, "model_matrix", &tank.bones[node_index].transform);
+							bind_texture_maps(&[tank.skeleton.albedo_maps[j], tank.skeleton.normal_maps[j], tank.skeleton.roughness_maps[j]]);
+			
+							tank.skeleton.draw_bone(j);						
+						}
+					}
+				}
+
+				//Render tank shells
+				gl::UseProgram(mapped_instanced_shader);
+
+				//Set texture sampler values
+				initialize_texture_samplers(mapped_instanced_shader, &TEXTURE_MAP_IDENTIFIERS);
+				glutil::bind_matrix4(mapped_instanced_shader, "shadow_matrix", &(shadow_projection * shadow_from_world));
+				glutil::bind_vector4(mapped_instanced_shader, "sun_direction", &sun_direction);
+
+				//Bind the shadow map's data
+				gl::ActiveTexture(gl::TEXTURE3);
+				gl::BindTexture(gl::TEXTURE_2D, shadow_rendertarget.texture);
+
+				//Bind the vertex array
+				gl::BindVertexArray(shell_mesh.vao);
+
+				//Bind the texture maps
+				for i in 0..shell_mesh.texture_maps.len() {
+					gl::ActiveTexture(gl::TEXTURE0 + i as GLenum);
+					gl::BindTexture(gl::TEXTURE_2D, shell_mesh.texture_maps[i]);
+				}
+				glutil::bind_matrix4(mapped_instanced_shader, "view_projection", &screen_state.clipping_from_world);
+				gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
+
+				//-----------Apply post-processing effects-----------
+				gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);			//Disable wireframe rendering for this section if it was enabled
+				gl::BindVertexArray(postprocessing_vao);				//Bind the VAO that just defines a screen-filling triangle
+				gl::ActiveTexture(gl::TEXTURE0);
+
+				//Apply the active image effect
+				match image_effect {
+					ImageEffect::Blur => {
+						let passes = 3;
+						initialize_texture_samplers(passthrough_shader, &["image_texture"]);
+						initialize_texture_samplers(gaussian_shader, &["image_texture"]);
+		
+						gl::UseProgram(gaussian_shader);
+						for _ in 0..passes {
+							//Do a horizontal pass followed by a vertical one. This reduces the necessary texture accesses from N^2 to 2N
+							for i in 0..screen_state.ping_pong_fbos.len() {
+								screen_state.ping_pong_fbos[i ^ 1].bind();
+								gl::BindTexture(gl::TEXTURE_2D, screen_state.ping_pong_fbos[i].texture);							
+								gl::GenerateMipmap(gl::TEXTURE_2D);											//Gen mipmaps so we can source from the downscaled image
+								glutil::bind_int(gaussian_shader, "horizontal", i as GLint ^ 1);			//Flag if this is a horizontal or vertical blur pass
+								gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
+							}
+						}
+		
+						//Render result to the default framebuffer
+						screen_state.default_framebuffer.bind();
+						gl::UseProgram(passthrough_shader);
+						gl::BindTexture(gl::TEXTURE_2D, screen_state.ping_pong_fbos[0].texture);
+						gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
+					}
+					ImageEffect::None => {
+						//Run the render through the passthrough shader
+						screen_state.default_framebuffer.bind();
+						gl::UseProgram(passthrough_shader);
+						gl::BindTexture(gl::TEXTURE_2D, screen_state.ping_pong_fbos[0].texture);
+						gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
+					}
+				}
+			} else {
+				//-----------Apply post-processing effects-----------
+				gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);			//Disable wireframe rendering for this section if it was enabled
+				gl::BindVertexArray(postprocessing_vao);				//Bind the VAO that just defines a screen-filling triangle
+				gl::ActiveTexture(gl::TEXTURE0);
+
+				//Run the render through the passthrough shader
+				screen_state.default_framebuffer.bind();
+				gl::UseProgram(passthrough_shader);
+				gl::BindTexture(gl::TEXTURE_2D, screen_state.ping_pong_fbos[0].texture);
+				gl::DrawElements(gl::TRIANGLES, 3, gl::UNSIGNED_SHORT, ptr::null());
 			}
 
-			//Before rendering 2D elements			
+			//Before rendering 2D elements
 			gl::Disable(gl::DEPTH_TEST);			//Disable depth testing
 
 			//Render UI buttons
@@ -1010,6 +1033,7 @@ fn main() {
 			}
 		}
 
+		frame_count += 1;
 		window.render_context().swap_buffers();
 		glfw.poll_events();
     }
