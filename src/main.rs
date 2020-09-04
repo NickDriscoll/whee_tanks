@@ -162,11 +162,11 @@ fn main() {
 		gl::Enable(gl::BLEND);											//Enable alpha blending
 		gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);			//Set blend func to (Cs * alpha + Cd * (1.0 - alpha))
 		gl::ClearColor(0.53, 0.81, 0.92, 1.0);							//Set the clear color to a pleasant blue
-		gl::Enable(gl::DEBUG_OUTPUT);									//Enable verbose debug output
-		gl::Enable(gl::DEBUG_OUTPUT_SYNCHRONOUS);						//Synchronously call the debug callback function
 
 		#[cfg(gloutput)]
 		{
+			gl::Enable(gl::DEBUG_OUTPUT);									//Enable verbose debug output
+			gl::Enable(gl::DEBUG_OUTPUT_SYNCHRONOUS);						//Synchronously call the debug callback function
 			gl::DebugMessageCallback(gl_debug_callback, ptr::null());		//Register the debug callback
 			gl::DebugMessageControl(gl::DONT_CARE, gl::DONT_CARE, gl::DONT_CARE, 0, ptr::null(), gl::TRUE);
 		}
@@ -409,8 +409,8 @@ fn main() {
 	//Hardcoded menu indices
 	let main_menu_index = 0;
 	let pause_menu_index = 1;
-	let dev_menu_index = 2;
-	let settings_menu_index = 3;
+	let settings_menu_index = 2;
+	let dev_menu_index = 3;
 
 	//Hardcoded menu chain indices
 	let main_menu_chain_index = 0;
@@ -443,15 +443,6 @@ fn main() {
 		);
 		menus.push(menu);
 
-		//Dev menu
-		let menu = Menu::new(
-			vec![
-				("Toggle collision volumes", None)
-			],
-			UIAnchor::LeftAligned(20.0, 20.0)
-		);
-		menus.push(menu);
-
 		//Settings menu data
 		let menu = Menu::new(
 			vec![
@@ -461,6 +452,18 @@ fn main() {
 			UIAnchor::CenterAligned(screen_state.window_size.0 as f32 / 2.0, screen_state.window_size.1 as f32 / 3.0)
 		);
 		menus.push(menu);
+
+		//Dev menu
+		#[cfg(dev_tools)]
+		{
+			let menu = Menu::new(
+				vec![
+					("Toggle collision volumes", None)
+				],
+				UIAnchor::LeftAligned(20.0, 20.0)
+			);
+			menus.push(menu);
+		}
 
 		let mut state = UIState::new(menus, &mut glyph_brush);
 		state.create_menu_chain(main_menu_index);
@@ -505,18 +508,20 @@ fn main() {
 
 			map.insert((InputKind::Key(Key::Escape), Action::Press), Command::PauseGame);
 			map.insert((InputKind::Key(Key::Q), Action::Press), Command::ToggleWireframe);
-			map.insert((InputKind::Key(Key::W), Action::Press), Command::MoveForwards);
-			map.insert((InputKind::Key(Key::S), Action::Press), Command::MoveBackwards);
-			map.insert((InputKind::Key(Key::A), Action::Press), Command::RotateLeft);
-			map.insert((InputKind::Key(Key::D), Action::Press), Command::RotateRight);
-			map.insert((InputKind::Key(Key::GraveAccent), Action::Press), Command::ToggleMenu(dev_menu_index));
+			map.insert((InputKind::Key(Key::W), Action::Press), Command::MoveTank(-Tank::SPEED));
+			map.insert((InputKind::Key(Key::S), Action::Press), Command::MoveTank(Tank::SPEED));
+			map.insert((InputKind::Key(Key::A), Action::Press), Command::RotateTank(-Tank::ROTATION_SPEED));
+			map.insert((InputKind::Key(Key::D), Action::Press), Command::RotateTank(Tank::ROTATION_SPEED));
 			map.insert((InputKind::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
+			
+			#[cfg(dev_tools)]
+			map.insert((InputKind::Key(Key::GraveAccent), Action::Press), Command::ToggleMenu(dev_menu_index));
 
 			//The keys here depend on the earlier bindings
-			map.insert((InputKind::Key(Key::W), Action::Release), Command::StopMoveForwards);
-			map.insert((InputKind::Key(Key::S), Action::Release), Command::StopMoveBackwards);
-			map.insert((InputKind::Key(Key::A), Action::Release), Command::StopRotateLeft);
-			map.insert((InputKind::Key(Key::D), Action::Release), Command::StopRotateRight);		
+			map.insert((InputKind::Key(Key::W), Action::Release), Command::MoveTank(Tank::SPEED));
+			map.insert((InputKind::Key(Key::S), Action::Release), Command::MoveTank(-Tank::SPEED));
+			map.insert((InputKind::Key(Key::A), Action::Release), Command::RotateTank(Tank::ROTATION_SPEED));
+			map.insert((InputKind::Key(Key::D), Action::Release), Command::RotateTank(-Tank::ROTATION_SPEED));		
 
 			map
 		};
@@ -526,7 +531,9 @@ fn main() {
 		let key_bindings = {
 			let mut map = HashMap::new();
 
-			map.insert((InputKind::Key(Key::Escape), Action::Press), Command::UnPauseGame);	
+			map.insert((InputKind::Key(Key::Escape), Action::Press), Command::UnPauseGame);
+
+			#[cfg(dev_tools)]
 			map.insert((InputKind::Key(Key::GraveAccent), Action::Press), Command::ToggleMenu(dev_menu_index));
 
 			map
@@ -609,44 +616,15 @@ fn main() {
 					ui_state.delete_section(title_section_index);
 					title_section_index = ui_state.add_section(title_section.clone());
 				}
-				Command::MoveForwards => {
+				Command::MoveTank(speed) => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.speed -= Tank::SPEED;
+						tank.speed += speed;
 					}
+
 				}
-				Command::MoveBackwards => {
+				Command::RotateTank(speed) => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.speed += Tank::SPEED;
-					}
-				}
-				Command::StopMoveForwards => {
-					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.speed += Tank::SPEED;
-					}
-				}
-				Command::StopMoveBackwards => {
-					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.speed -= Tank::SPEED;
-					}
-				}
-				Command::RotateLeft => {
-					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.rotating -= Tank::ROTATION_SPEED;
-					}
-				}
-				Command::RotateRight => {
-					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.rotating += Tank::ROTATION_SPEED;
-					}
-				}
-				Command::StopRotateLeft => {
-					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.rotating += Tank::ROTATION_SPEED;
-					}
-				}
-				Command::StopRotateRight => {
-					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
-						tank.rotating -= Tank::ROTATION_SPEED;
+						tank.rotating += speed;
 					}
 				}
 				Command::PauseGame => {
