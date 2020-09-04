@@ -11,8 +11,8 @@ pub enum InputKind {
 pub enum Command {
     Quit,
     ToggleWireframe,
-    RotateTank(f32),
-    MoveTank(f32),
+    RotatePlayerTank(f32),
+    MovePlayerTank(f32),
     Fire,
     PauseGame,
     UnPauseGame,
