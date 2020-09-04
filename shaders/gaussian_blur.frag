@@ -9,6 +9,8 @@ uniform bool horizontal;
 
 const int TAP = 9; //Must be odd
 const int BOUND = TAP / 2;
+
+//The values for these weights are merely contants generated from a python script
 const float GAUSSIAN_WEIGHTS[TAP / 2 + 1] = float[](0.1913811563169165, 0.17224304068522484, 0.1252676659528908, 0.07307280513918629, 0.03372591006423983);
 
 vec3 do_blur(vec2 texel_size) {
