@@ -19,7 +19,6 @@ mod structs;
 mod input;
 mod ui;
 
-const WINDOWED_SIZE: (u32, u32) = (1920, 1080);
 const DEFAULT_TEX_PARAMS: [(GLenum, GLenum); 4] = [
 	(gl::TEXTURE_WRAP_S, gl::REPEAT),
 	(gl::TEXTURE_WRAP_T, gl::REPEAT),
@@ -122,7 +121,7 @@ fn main() {
 	let world_space_look_direction = world_from_view * glm::vec4(0.0, 0.0, 1.0, 0.0);
 
 	//Variables that depend on screen size
-	let screen_size = (1920, 1080);
+	const WINDOWED_SIZE: (u32, u32) = (1920, 1080);
 
 	//Init glfw
 	let mut glfw = match glfw::init(glfw::FAIL_ON_ERRORS) {
@@ -137,7 +136,7 @@ fn main() {
 	glfw.window_hint(glfw::WindowHint::OpenGlDebugContext(true));
 
 	//Create window
-    let (mut window, events) = glfw.create_window(screen_size.0, screen_size.1, game_title, WindowMode::Windowed).unwrap();
+    let (mut window, events) = glfw.create_window(WINDOWED_SIZE.0, WINDOWED_SIZE.1, game_title, WindowMode::Windowed).unwrap();
 
 	//Make the window non-resizable
 	window.set_resizable(false);
@@ -153,7 +152,7 @@ fn main() {
 	gl::load_with(|symbol| window.get_proc_address(symbol) as *const _);
 
 	//Struct of state that depends on screen size
-	let mut screen_state = ScreenState::new(screen_size, &view_from_world);
+	let mut screen_state = ScreenState::new(WINDOWED_SIZE, &view_from_world);
 
 	//OpenGL static configuration
 	unsafe {
@@ -392,11 +391,10 @@ fn main() {
 	};
 
 	let ortho_size = 5.0;
-	let shadow_from_world = glm::mat4(-1.0, 0.0, 0.0, 0.0,
-									   0.0, 1.0, 0.0, 0.0,
-									   0.0, 0.0, 1.0, 0.0,
-									   0.0, 0.0, 0.0, 1.0) * glm::look_at(&glm::vec4_to_vec3(&(sun_direction * 4.0)), &glm::zero(), &glm::vec3(0.0, 1.0, 0.0));
-	let shadow_projection = glm::ortho(-ortho_size * 3.0, ortho_size * 3.0, -ortho_size * 3.0, ortho_size * 3.0, -ortho_size * 2.0, ortho_size * 3.0);
+	let shadow_matrix = glm::ortho(-ortho_size * 3.0, ortho_size * 3.0, -ortho_size * 3.0, ortho_size * 3.0, -ortho_size * 2.0, ortho_size * 3.0) * glm::mat4(-1.0, 0.0, 0.0, 0.0,
+										0.0, 1.0, 0.0, 0.0,
+										0.0, 0.0, 1.0, 0.0,
+										0.0, 0.0, 0.0, 1.0) * glm::look_at(&glm::vec4_to_vec3(&(sun_direction * 4.0)), &glm::zero(), &glm::vec3(0.0, 1.0, 0.0));
 
 	let font = match FontArc::try_from_slice(include_bytes!("../fonts/Constantia.ttf")) {
 		Ok(s) => { s }
@@ -422,6 +420,8 @@ fn main() {
 	//Data structure of all UI state
 	let mut ui_state = {
 		let mut menus = Vec::new();
+
+		let float_window_size = (screen_state.window_size.0 as f32, screen_state.window_size.1 as f32);
 		
 		//Main Menu data
 		let menu = Menu::new(
@@ -431,7 +431,7 @@ fn main() {
 				("Settings", Some(Command::AppendToMenuChain(main_menu_chain_index, settings_menu_index))),
 				("Exit", Some(Command::Quit)),
 			],
-			UIAnchor::CenterAligned(screen_state.window_size.0 as f32 / 2.0, screen_state.window_size.1 as f32 / 3.0)
+			UIAnchor::DeadCenter(float_window_size)
 		);
 		menus.push(menu);
 
@@ -443,17 +443,22 @@ fn main() {
 				("Main Menu", Some(Command::ReturnToMainMenu)),
 				("Exit", Some(Command::Quit)),
 			],
-			UIAnchor::CenterAligned(screen_state.window_size.0 as f32 / 2.0, screen_state.window_size.1 as f32 / 3.0)
+			UIAnchor::DeadCenter(float_window_size)
 		);
 		menus.push(menu);
 
 		//Settings menu data
-		let menu = Menu::new(
+		let menu = Menu::new_with_colors(
 			vec![
-				("Toggle fullscreen", Some(Command::ToggleFullScreen)),
-				("Back", Some(Command::MenuChainRollback(main_menu_chain_index))),
+				("Toggle fullscreen", Some(Command::ToggleFullScreen), [1.0, 1.0, 1.0, 1.0]),
+				("i thought", None, [1.0, 0.0, 1.0, 1.0]),
+				("that there should", None, [1.0, 0.0, 1.0, 1.0]),
+				("be", None, [1.0, 0.0, 1.0, 1.0]),
+				("more buttons", None, [1.0, 0.0, 1.0, 1.0]),
+				("-rupi kaur", None, [1.0, 0.0, 1.0, 1.0]),
+				("Back", Some(Command::MenuChainRollback(main_menu_chain_index)), [1.0, 1.0, 1.0, 1.0]),
 			],
-			UIAnchor::CenterAligned(screen_state.window_size.0 as f32 / 2.0, screen_state.window_size.1 as f32 / 3.0)
+			UIAnchor::DeadCenter(float_window_size)
 		);
 		menus.push(menu);
 
@@ -593,7 +598,7 @@ fn main() {
 			match command {
 				Command::Quit => { window.set_should_close(true); }
 				Command::ToggleWireframe => { is_wireframe = !is_wireframe; }
-				Command::ToggleFullScreen => {					
+				Command::ToggleFullScreen => {
 					//Get a fresh 3D render this frame
 					snapshot_frame = frame_count;
 
@@ -870,6 +875,19 @@ fn main() {
 				//Enable depth testing for 3D scene drawing
 				gl::Enable(gl::DEPTH_TEST);
 
+				//Bind all uniforms that are constant throughout the frame
+				initialize_texture_samplers(mapped_shader, &TEXTURE_MAP_IDENTIFIERS);
+				glutil::bind_matrix4(mapped_shader, "shadow_matrix", &shadow_matrix);
+				glutil::bind_vector4(mapped_shader, "sun_direction", &sun_direction);
+				glutil::bind_matrix4(mapped_instanced_shader, "shadow_matrix", &shadow_matrix);
+				glutil::bind_matrix4(mapped_instanced_shader, "view_projection", &screen_state.clipping_from_world);
+				glutil::bind_vector4(mapped_instanced_shader, "sun_direction", &sun_direction);
+				initialize_texture_samplers(mapped_instanced_shader, &TEXTURE_MAP_IDENTIFIERS);
+				glutil::bind_matrix4(shadow_shader_instanced, "view_projection", &shadow_matrix);
+				initialize_texture_samplers(passthrough_shader, &["image_texture"]);
+				initialize_texture_samplers(gaussian_shader, &["image_texture"]);
+				initialize_texture_samplers(glyph_shader, &["glyph_texture"]);
+
 				//-----------Shadow map rendering-----------
 
 				//Bind shadowmap fbo
@@ -881,7 +899,7 @@ fn main() {
 				//Render arena pieces
 				for piece in arena_pieces.iter() {
 					gl::BindVertexArray(piece.vao);
-					glutil::bind_matrix4(shadow_shader, "mvp", &(shadow_projection * shadow_from_world * piece.model_matrix));
+					glutil::bind_matrix4(shadow_shader, "mvp", &(shadow_matrix * piece.model_matrix));
 					gl::DrawElements(gl::TRIANGLES, piece.index_count, gl::UNSIGNED_SHORT, ptr::null());
 				}
 
@@ -891,7 +909,7 @@ fn main() {
 					if let Some(tank) = &tanks[i] {
 						for j in 0..tank.skeleton.node_list.len() {
 							let node_index = tank.skeleton.node_list[j];
-							glutil::bind_matrix4(shadow_shader, "mvp", &(shadow_projection * shadow_from_world * tank.bones[node_index].transform));
+							glutil::bind_matrix4(shadow_shader, "mvp", &(shadow_matrix * tank.bones[node_index].transform));
 
 							tank.skeleton.draw_bone(j);
 						}
@@ -901,7 +919,6 @@ fn main() {
 				//Render shells
 				gl::UseProgram(shadow_shader_instanced);
 				gl::BindVertexArray(shell_mesh.vao);
-				glutil::bind_matrix4(shadow_shader_instanced, "view_projection", &(shadow_projection * shadow_from_world));
 				gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
 
 				//-----------Main scene rendering-----------
@@ -915,11 +932,6 @@ fn main() {
 
 				//Bind program for texture-mapped objects
 				gl::UseProgram(mapped_shader);
-
-				//Set uniforms that are constant for the lifetime of the program
-				initialize_texture_samplers(mapped_shader, &TEXTURE_MAP_IDENTIFIERS);
-				glutil::bind_matrix4(mapped_shader, "shadow_matrix", &(shadow_projection * shadow_from_world));
-				glutil::bind_vector4(mapped_shader, "sun_direction", &sun_direction);
 				
 				gl::ActiveTexture(gl::TEXTURE3);
 				gl::BindTexture(gl::TEXTURE_2D, shadow_rendertarget.texture);
@@ -944,18 +956,13 @@ fn main() {
 							glutil::bind_matrix4(mapped_shader, "model_matrix", &tank.bones[node_index].transform);
 							bind_texture_maps(&[tank.skeleton.albedo_maps[j], tank.skeleton.normal_maps[j], tank.skeleton.roughness_maps[j]]);
 			
-							tank.skeleton.draw_bone(j);						
+							tank.skeleton.draw_bone(j);
 						}
 					}
 				}
 
 				//Render tank shells
 				gl::UseProgram(mapped_instanced_shader);
-
-				//Set texture sampler values
-				initialize_texture_samplers(mapped_instanced_shader, &TEXTURE_MAP_IDENTIFIERS);
-				glutil::bind_matrix4(mapped_instanced_shader, "shadow_matrix", &(shadow_projection * shadow_from_world));
-				glutil::bind_vector4(mapped_instanced_shader, "sun_direction", &sun_direction);
 
 				//Bind the shadow map's data
 				gl::ActiveTexture(gl::TEXTURE3);
@@ -969,7 +976,6 @@ fn main() {
 					gl::ActiveTexture(gl::TEXTURE0 + i as GLenum);
 					gl::BindTexture(gl::TEXTURE_2D, shell_mesh.texture_maps[i]);
 				}
-				glutil::bind_matrix4(mapped_instanced_shader, "view_projection", &screen_state.clipping_from_world);
 				gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
 
 				//-----------Apply post-processing effects-----------
@@ -981,12 +987,10 @@ fn main() {
 				match image_effect {
 					ImageEffect::Blur => {
 						let passes = 3;
-						initialize_texture_samplers(passthrough_shader, &["image_texture"]);
-						initialize_texture_samplers(gaussian_shader, &["image_texture"]);
 		
 						gl::UseProgram(gaussian_shader);
 						for _ in 0..passes {
-							//Do a horizontal pass followed by a vertical one. This reduces the necessary texture accesses from N^2 to 2N
+							//Do a horizontal pass followed by a vertical one.
 							for i in 0..screen_state.ping_pong_fbos.len() {
 								screen_state.ping_pong_fbos[i ^ 1].bind();
 								gl::BindTexture(gl::TEXTURE_2D, screen_state.ping_pong_fbos[i].texture);							
@@ -1033,7 +1037,6 @@ fn main() {
 
 			//Render text
 			if let Some(vao) = ui_state.glyph_vao {
-				initialize_texture_samplers(glyph_shader, &["glyph_texture"]);
 				gl::ActiveTexture(gl::TEXTURE0);
 				gl::BindTexture(gl::TEXTURE_2D, ui_state.glyph_texture);
 

@@ -34,7 +34,7 @@ unsafe fn upload_glyph_texture(glyph_texture: GLuint, rect: Rectangle<u32>, data
 }
 
 //Second argument to glyph_brush.process_queued()
-fn glyph_vertex_transform(vertex: GlyphVertex) -> GlyphBrushVertexType {	
+fn glyph_vertex_transform(vertex: GlyphVertex) -> GlyphBrushVertexType {
 	let left = vertex.pixel_coords.min.x as f32;
 	let right = vertex.pixel_coords.max.x as f32;
 	let top = vertex.pixel_coords.min.y as f32;
@@ -252,8 +252,9 @@ impl<'a> UIState<'a> {
 	
 	pub fn update_screen_size(&mut self, size: (u32, u32)) {
 		for menu in self.menus.iter_mut() {
-			if let UIAnchor::CenterAligned(_, _) = menu.anchor {
-				menu.anchor = UIAnchor::CenterAligned(size.0 as f32 / 2.0, size.1 as f32 / 3.0);
+			if let UIAnchor::DeadCenter(_) = menu.anchor {
+				let ugh = (size.0 as f32, size.1 as f32);
+				menu.anchor = UIAnchor::DeadCenter(ugh);
 				if menu.active {
 					menu.toggle(&mut self.internals);
 					menu.toggle(&mut self.internals);
@@ -445,7 +446,9 @@ impl UIButton {
 }
 
 pub struct Menu<'a> {
-    buttons: Vec<(&'a str, Option<Command>)>,
+	button_labels: Vec<&'a str>,
+	button_commands: Vec<Option<Command>>,
+	label_colors: Vec<[f32; 4]>,
     anchor: UIAnchor,
     active: bool,
     ids: Vec<usize> //Indices into the buttons OptionVec. These are only valid when self.active == true
@@ -453,14 +456,47 @@ pub struct Menu<'a> {
 
 impl<'a> Menu<'a> {
     pub fn new(buttons: Vec<(&'a str, Option<Command>)>, anchor: UIAnchor) -> Self {
-        let size = buttons.len();
+		let size = buttons.len();
+		let mut button_labels = Vec::with_capacity(size);
+		let mut button_commands = Vec::with_capacity(size);
+		for butt in buttons.iter() {
+			button_labels.push(butt.0);
+			button_commands.push(butt.1);
+		}
+
+		let label_colors = vec![[1.0, 1.0, 1.0, 1.0]; size];
+		
         Menu {
-            buttons,
+            button_labels,
+            button_commands,
+            label_colors,
             anchor,
             active: false,
             ids: vec![0; size]
         }
-    }
+	}
+	
+	pub fn new_with_colors(buttons: Vec<(&'a str, Option<Command>, [f32; 4])>, anchor: UIAnchor) -> Self {
+		let size = buttons.len();
+		let mut button_labels = Vec::with_capacity(size);
+		let mut button_commands = Vec::with_capacity(size);
+		let mut label_colors = Vec::with_capacity(size);
+		for butt in buttons.iter() {
+			button_labels.push(butt.0);
+			button_commands.push(butt.1);
+			label_colors.push(butt.2);
+		}
+
+        Menu {
+            button_labels,
+            button_commands,
+            label_colors,
+            anchor,
+            active: false,
+            ids: vec![0; size]
+        }
+
+	}
 
     //Adds this menu's data to the arrays of buttons and sections
     pub fn show(&mut self, ui_internals: &mut UIInternals<'a>) {
@@ -470,10 +506,10 @@ impl<'a> Menu<'a> {
 		const BORDER_WIDTH: f32 = 15.0;
 		const BUFFER_DISTANCE: f32 = 10.0;
 		let font_size = 36.0;
-		for i in 0..self.buttons.len() {
+		for i in 0..self.button_labels.len() {
 			let mut section = {
 				let section = Section::new();
-				let mut text = Text::new(self.buttons[i].0).with_color([1.0, 1.0, 1.0, 1.0]);
+				let mut text = Text::new(self.button_labels[i]).with_color(self.label_colors[i]);
 				text.scale = PxScale::from(font_size);
 				section.add_text(text)
 			};
@@ -495,9 +531,12 @@ impl<'a> Menu<'a> {
                         max: [x_pos + width, y_pos + height]
                     }
                 }
-                UIAnchor::CenterAligned(x, y) => {
-                    let x_pos = x - width / 2.0;
-                    let y_pos = y + i as f32 * (height + BUFFER_DISTANCE);
+                UIAnchor::DeadCenter(window_size) => {
+					let total_menu_height = (height + BUFFER_DISTANCE) * self.button_labels.len() as f32 - BUFFER_DISTANCE;
+
+					let x_pos = (window_size.0 - width) / 2.0;
+					let y_pos = (window_size.1 - total_menu_height) / 2.0 + i as f32 * (height + BUFFER_DISTANCE);
+                    //let y_pos = y + i as f32 * (height + BUFFER_DISTANCE);
                     glyph_brush::Rectangle {
                         min: [x_pos, y_pos],
                         max: [x_pos + width, y_pos + height]
@@ -513,7 +552,7 @@ impl<'a> Menu<'a> {
 		    //Finally insert the section into the array
 		    let section_id = ui_internals.sections.insert(section);
 
-    		let button = UIButton::new(section_id, button_bounds, self.buttons[i].1);
+    		let button = UIButton::new(section_id, button_bounds, self.button_commands[i]);
     		self.ids[i] = ui_internals.add_button(button);
         }
         self.active = true;
@@ -540,7 +579,7 @@ impl<'a> Menu<'a> {
 //Defines the anchor point of the UI element and how that anchor is configured
 pub enum UIAnchor {
     LeftAligned(f32, f32),
-    CenterAligned(f32, f32)
+    DeadCenter((f32, f32))
 }
 
 #[derive(PartialEq, Eq, Debug)]

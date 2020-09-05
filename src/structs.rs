@@ -155,9 +155,7 @@ impl TextureKeeper {
     pub unsafe fn fetch_texture(&mut self, name: &str, map_type: &str) -> GLuint {        
 		let texture_path = format!("textures/{}/{}.png", name, map_type);
 		match self.map.get(&texture_path) {
-			Some(t) => {
-				*t
-			}
+			Some(t) => { *t }
 			None => {
 				let name = glutil::load_texture(&texture_path, &DEFAULT_TEX_PARAMS);
 				self.map.insert(texture_path, name);
