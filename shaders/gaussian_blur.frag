@@ -19,7 +19,7 @@ void main() {
     vec3 result = vec3(0.0);
     for (int i = -BOUND; i <= BOUND; i++) {
         float weight = GAUSSIAN_WEIGHTS[abs(i)];
-        vec3 sample = textureLod(image_texture, f_uvs + i * unit_uv_offset * texel_size, 2).xyz;
+        vec3 sample = textureLod(image_texture, f_uvs + i * unit_uv_offset * texel_size, 3).xyz;
         result += sample * weight;
     }
     frag_color = vec4(result, 1.0);

@@ -20,6 +20,7 @@ pub enum Command {
     AppendToMenuChain(usize, usize),
     MenuChainRollback(usize),
     ToggleFullScreen,
+    ToggleBlur,
     StartPlaying,
     ReturnToMainMenu
 }

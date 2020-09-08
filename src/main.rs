@@ -338,7 +338,6 @@ fn main() {
 	let mut elapsed_time = 0.0;	//This only increments when the game is actually playing
 
 	let mut is_wireframe = false;
-	let mut use_cached_3D_render = false;
 
 	//Each frame this is filled with Commands, then drained when processed
 	let mut command_buffer = Vec::new();
@@ -412,6 +411,8 @@ fn main() {
 	let main_menu_index = 0;
 	let pause_menu_index = 1;
 	let settings_menu_index = 2;
+
+	#[cfg(dev_tools)]
 	let dev_menu_index = 3;
 
 	//Hardcoded menu chain indices
@@ -468,6 +469,7 @@ fn main() {
 			let menu = Menu::new(
 				vec![
 					("Toggle wireframe", Some(Command::ToggleWireframe)),
+					("Toggle blur", Some(Command::ToggleBlur)),
 					("Toggle collision volumes", None)
 				],
 				UIAnchor::LeftAligned(20.0, 20.0)
@@ -557,6 +559,9 @@ fn main() {
 
 	//Main loop
     while !window.should_close() {
+		//Per-frame flag
+		let use_cached_3D_render;
+
 		//Calculate time since the last frame started in seconds
 		let delta_time = {
 			let frame_instant = Instant::now();
@@ -598,6 +603,12 @@ fn main() {
 			match command {
 				Command::Quit => { window.set_should_close(true); }
 				Command::ToggleWireframe => { is_wireframe = !is_wireframe; }
+				Command::ToggleBlur => { 
+					image_effect = match image_effect {
+						ImageEffect::Blur => ImageEffect::None,
+						ImageEffect::None => ImageEffect::Blur
+					}
+				 }
 				Command::ToggleFullScreen => {
 					//Get a fresh 3D render this frame
 					snapshot_frame = frame_count;
@@ -693,13 +704,14 @@ fn main() {
 					//Start the music
 					if let Some(sink) = &bgm_sink {
 						if sink.empty() {
-							let file = match File::open(bgm_path) {
-								Ok(f) => { f }
-								Err(e) => {	panic!("Couldn't play \"{}\":\n{}", bgm_path, e); }
-							};
-							let source = rodio::Decoder::new(BufReader::new(file)).unwrap();
-							sink.append(source);
-							sink.set_volume(bgm_volume);
+							match File::open(bgm_path) {
+								Ok(f) => { 
+									let source = rodio::Decoder::new(BufReader::new(f)).unwrap();
+									sink.append(source);
+									sink.set_volume(bgm_volume);
+								}
+								Err(e) => {	println!("Couldn't play \"{}\":\n{}", bgm_path, e); }
+							}
 						} else {
 							sink.play();
 							sink.set_volume(bgm_volume);
@@ -753,6 +765,9 @@ fn main() {
 				//Update the tanks				
 				for j in 0..tanks.len() {
 					if let Some(tank) = tanks.get_mut_element(j) {
+						//Check if tank collided with any shells
+						
+
 						//Update the tank's forward vector
 						tank.forward = glm::vec4_to_vec3(&(glm::rotation(tank.rotating * delta_time, &glm::vec3(0.0, 1.0, 0.0)) * glm::vec3_to_vec4(&tank.forward)));
 
@@ -796,13 +811,13 @@ fn main() {
 						if tank.firing {
 							tank.firing = false;
 							let timer_expired = elapsed_time > tank.last_shot_time + Tank::SHOT_COOLDOWN;			//Has this tank cooled down from its last shot?
-							let shell_buffer_has_room = shells.count() < maximum_live_shells;						//Is the shell buffer completely full?
+							let shell_buffer_has_room = shells.count() < maximum_live_shells;						//Does the shell buffer have room?
 
 							//If all conditions are met, fire a shell
 							if timer_expired && shell_buffer_has_room {
 								tank.last_shot_time = elapsed_time;
 	
-								let transform = tank.bones[1].transform;
+								let transform = tank.bones[Tank::TURRET_INDEX].transform;
 								let position = transform * glm::vec4(0.0, 0.0, 0.0, 1.0);
 								let velocity = tank.turret_forward * Shell::VELOCITY;
 	
@@ -875,7 +890,7 @@ fn main() {
 				//Enable depth testing for 3D scene drawing
 				gl::Enable(gl::DEPTH_TEST);
 
-				//Bind all uniforms that are constant throughout the frame
+				//Bind all uniforms that are constant per-frame
 				initialize_texture_samplers(mapped_shader, &TEXTURE_MAP_IDENTIFIERS);
 				glutil::bind_matrix4(mapped_shader, "shadow_matrix", &shadow_matrix);
 				glutil::bind_vector4(mapped_shader, "sun_direction", &sun_direction);
@@ -986,7 +1001,7 @@ fn main() {
 				//Apply the active image effect
 				match image_effect {
 					ImageEffect::Blur => {
-						let passes = 3;
+						let passes = 4;
 		
 						gl::UseProgram(gaussian_shader);
 						for _ in 0..passes {
@@ -1015,7 +1030,6 @@ fn main() {
 					}
 				}
 			} else {
-				//-----------Apply post-processing effects-----------
 				gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);			//Disable wireframe rendering for this section if it was enabled
 				gl::BindVertexArray(postprocessing_vao);				//Bind the VAO that just defines a screen-filling triangle
 				gl::ActiveTexture(gl::TEXTURE0);

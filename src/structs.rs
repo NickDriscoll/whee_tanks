@@ -93,8 +93,8 @@ impl<'a> Tank<'a> {
     pub const SPEED: f32 = 4.0;
     pub const ROTATION_SPEED: f32 = 3.141592654;
     pub const SHOT_COOLDOWN: f32 = 1.5;
-    const HULL_INDEX: usize = 0;
-    const TURRET_INDEX: usize = 1;
+    pub const HULL_INDEX: usize = 0;
+    pub const TURRET_INDEX: usize = 1;
     
     pub fn new(position: glm::TVec3<f32>, forward: glm::TVec3<f32>, skeleton: &'a Skeleton, brain: Brain) -> Self {        
         Tank {
