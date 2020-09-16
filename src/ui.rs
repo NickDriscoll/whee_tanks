@@ -536,7 +536,6 @@ impl<'a> Menu<'a> {
 
 					let x_pos = (window_size.0 - width) / 2.0;
 					let y_pos = (window_size.1 - total_menu_height) / 2.0 + i as f32 * (height + BUFFER_DISTANCE);
-                    //let y_pos = y + i as f32 * (height + BUFFER_DISTANCE);
                     glyph_brush::Rectangle {
                         min: [x_pos, y_pos],
                         max: [x_pos + width, y_pos + height]

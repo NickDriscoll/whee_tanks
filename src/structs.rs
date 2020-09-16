@@ -7,6 +7,8 @@ use ozy_engine::{glutil, routines};
 use crate::DEFAULT_TEX_PARAMS;
 use crate::input::{Command, InputKind};
 
+pub const MAP_COUNT: usize = 3;      //[albedo, normal, roughness]
+
 pub struct StaticGeometry {
     pub vao: GLuint,
     pub albedo: GLuint,
@@ -15,14 +17,23 @@ pub struct StaticGeometry {
     pub index_count: GLsizei
 }
 
-//Something too simple for a skeleton
+//One contiguous piece of geometry
 pub struct SimpleMesh {
     pub vao: GLuint,
-    pub texture_maps: [GLuint; 3],      //[albedo, normal, roughness]
+    pub texture_maps: [GLuint; MAP_COUNT],
     pub index_count: GLint
 }
 
 impl SimpleMesh {
+    pub fn new(vao: GLuint, texture_maps: [GLuint; MAP_COUNT], in_count: usize) -> Self {
+        let index_count = in_count as GLint;
+        SimpleMesh {
+            vao,
+            texture_maps,
+            index_count
+        }
+    }
+
     pub fn from_ozy(path: &str, texture_keeper: &mut TextureKeeper) -> Self {
         match routines::load_ozymesh(path) {
             Some(meshdata) => unsafe {

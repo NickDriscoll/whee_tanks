@@ -9,7 +9,7 @@ use glfw::{Action, Context, Key, MouseButton, WindowEvent, WindowMode};
 use gl::types::*;
 use glyph_brush::{ab_glyph::{FontArc, PxScale}, GlyphBrushBuilder, GlyphCruncher, Section, Text};
 use rodio::{Sink};
-use ozy_engine::{glutil, routines};
+use ozy_engine::{glutil, prims, routines};
 use ozy_engine::structs::OptionVec;
 use crate::structs::*;
 use crate::input::{Command, Input, InputKind};
@@ -95,14 +95,14 @@ extern "system" fn gl_debug_callback(source: GLenum, gltype: GLenum, id: GLuint,
 	println!("Message: {}", m);
 }
 
-pub unsafe fn draw_ui_elements(vao: GLuint, shader: GLuint, count: usize, clipping_from_screen: &glm::TMat4<f32>) {
+unsafe fn draw_ui_elements(vao: GLuint, shader: GLuint, count: usize, clipping_from_screen: &glm::TMat4<f32>) {
     gl::UseProgram(shader);
 	glutil::bind_matrix4(shader, "clipping_from_screen", &clipping_from_screen);
 	gl::BindVertexArray(vao);
 	gl::DrawElements(gl::TRIANGLES, 6 * count as GLint, gl::UNSIGNED_SHORT, ptr::null());
 }
 
-pub fn submit_input_command(input: &Input, command_buffer: &mut Vec<Command>, bindings: &HashMap<Input, Command>) {	
+fn submit_input_command(input: &Input, command_buffer: &mut Vec<Command>, bindings: &HashMap<Input, Command>) {	
 	if let Some(command) = bindings.get(input) {
 		command_buffer.push(*command);
 	}
@@ -191,6 +191,8 @@ fn main() {
 	let passthrough_shader = unsafe { glutil::compile_program_from_files("shaders/postprocessing.vert", "shaders/postprocessing.frag") };
 	let gaussian_shader = unsafe { glutil::compile_program_from_files("shaders/postprocessing.vert", "shaders/gaussian_blur.frag") };
 	let ui_shader = unsafe { glutil::compile_program_from_files("shaders/ui_button.vert", "shaders/ui_button.frag") };
+	let prim_shader = unsafe { glutil::compile_program_from_files("shaders/prim.vert", "shaders/prim.frag") };
+	let prim_shadow_shader = unsafe { glutil::compile_program_from_files("shaders/prim.vert", "shaders/shadow.frag") };
 	let edit_shader = unsafe { glutil::compile_program_from_files("shaders/mapped.vert", "shaders/edit.frag") };
 
 	//Initialize texture caching data structure
@@ -405,6 +407,7 @@ fn main() {
 	let mut world_space_mouse = screen_state.world_from_clipping * glm::vec4(0.0, 0.0, 0.0, 1.0);
 	let mut screen_space_mouse = glm::vec2(0.0, 0.0);
 	let mut mouse_lbutton_pressed = false;
+	let mut mouse_rbutton_pressed = false;
 	let mut last_mouse_lbutton_pressed = false;
 
 	//Hardcoded menu indices
@@ -449,15 +452,10 @@ fn main() {
 		menus.push(menu);
 
 		//Settings menu data
-		let menu = Menu::new_with_colors(
+		let menu = Menu::new(
 			vec![
-				("Toggle fullscreen", Some(Command::ToggleFullScreen), [1.0, 1.0, 1.0, 1.0]),
-				("i thought", None, [1.0, 0.0, 1.0, 1.0]),
-				("that there should", None, [1.0, 0.0, 1.0, 1.0]),
-				("be", None, [1.0, 0.0, 1.0, 1.0]),
-				("more buttons", None, [1.0, 0.0, 1.0, 1.0]),
-				("-rupi kaur", None, [1.0, 0.0, 1.0, 1.0]),
-				("Back", Some(Command::MenuChainRollback(main_menu_chain_index)), [1.0, 1.0, 1.0, 1.0]),
+				("Toggle fullscreen", Some(Command::ToggleFullScreen)),
+				("Back", Some(Command::MenuChainRollback(main_menu_chain_index))),
 			],
 			UIAnchor::DeadCenter(float_window_size)
 		);
@@ -557,6 +555,12 @@ fn main() {
 	//Effect to use during the image effect step
 	let mut image_effect = ImageEffect::None;
 
+	let sphere_segments = 32;
+	let sphere_rings = 32;
+	let sphere_vao = prims::sphere_vao(1.0, sphere_segments, sphere_rings);
+	let sphere_index_count = prims::sphere_index_count(sphere_segments, sphere_rings);
+	let mut sphere_transform = glm::translation(&glm::vec3(0.0, 0.5, 0.0));
+
 	//Main loop
     while !window.should_close() {
 		//Per-frame flag
@@ -581,8 +585,15 @@ fn main() {
 				WindowEvent::MouseButton(button, action, ..) => {
 					submit_input_command(&(InputKind::Mouse(button), action), &mut command_buffer, &key_bindings);
 
-					if button == MouseButton::Button1 {
-						mouse_lbutton_pressed = action == Action::Press;
+					//Check if the button is pressed
+					match button {
+						MouseButton::Button1 => {
+							mouse_lbutton_pressed = action == Action::Press;
+						}
+						MouseButton::Button2 => {
+							mouse_rbutton_pressed = action == Action::Press;
+						}
+						_ => {}
 					}
 				}
 				WindowEvent::CursorPos(x, y) => {
@@ -780,7 +791,7 @@ fn main() {
 									new_x.y, 1.0, tank.forward.y, 0.0,
 									new_x.z, 0.0, tank.forward.z, 0.0,
 									0.0, 0.0, 0.0, 1.0
-									)
+							)
 						};
 
 						tank.bones[0].transform = glm::translation(&tank.position) * tank.rotation;
@@ -809,7 +820,7 @@ fn main() {
 
 						//Fire a shell if the tank's firing flag is set and if the tank is not in cooldown
 						if tank.firing {
-							tank.firing = false;
+							tank.firing = mouse_rbutton_pressed;
 							let timer_expired = elapsed_time > tank.last_shot_time + Tank::SHOT_COOLDOWN;			//Has this tank cooled down from its last shot?
 							let shell_buffer_has_room = shells.count() < maximum_live_shells;						//Does the shell buffer have room?
 
@@ -871,6 +882,9 @@ fn main() {
 										);
 					}
 				}
+
+				//Update the sphere
+				sphere_transform = glm::translation(&glm::vec3(0.0, 0.5, 0.0)) * glm::rotation(elapsed_time / 2.0, &glm::vec3(1.0, 0.0, 0.0));
 			}
 			GameStateKind::MainMenu => { use_cached_3D_render = frame_count != snapshot_frame; }
 			GameStateKind::Paused => { use_cached_3D_render = frame_count != snapshot_frame; }
@@ -992,6 +1006,13 @@ fn main() {
 					gl::BindTexture(gl::TEXTURE_2D, shell_mesh.texture_maps[i]);
 				}
 				gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
+
+				//Render transparent geometry
+				gl::UseProgram(prim_shader);
+				gl::BindVertexArray(sphere_vao);
+				glutil::bind_matrix4(prim_shader, "mvp", &(screen_state.clipping_from_world * sphere_transform));
+				glutil::bind_vector4(prim_shader, "color", &glm::vec4(0.0, 0.0, 1.0, 0.5));
+				gl::DrawElements(gl::TRIANGLES, sphere_index_count as GLint, gl::UNSIGNED_SHORT, ptr::null());
 
 				//-----------Apply post-processing effects-----------
 				gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);			//Disable wireframe rendering for this section if it was enabled
