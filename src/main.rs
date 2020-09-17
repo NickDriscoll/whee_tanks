@@ -12,11 +12,13 @@ use rodio::{Sink};
 use ozy_engine::{glutil, prims, routines};
 use ozy_engine::structs::OptionVec;
 use crate::structs::*;
-use crate::input::{Command, Input, InputKind};
+use crate::input::{Command, Input, InputKind, {submit_input_command}};
 use crate::ui::{Menu, UIAnchor, UIState};
+use crate::render::{Bone, Framebuffer, RenderTarget, SimpleMesh, Skeleton, StaticGeometry, TextureKeeper};
 
-mod structs;
 mod input;
+mod render;
+mod structs;
 mod ui;
 
 const DEFAULT_TEX_PARAMS: [(GLenum, GLenum); 4] = [
@@ -100,12 +102,6 @@ unsafe fn draw_ui_elements(vao: GLuint, shader: GLuint, count: usize, clipping_f
 	glutil::bind_matrix4(shader, "clipping_from_screen", &clipping_from_screen);
 	gl::BindVertexArray(vao);
 	gl::DrawElements(gl::TRIANGLES, 6 * count as GLint, gl::UNSIGNED_SHORT, ptr::null());
-}
-
-fn submit_input_command(input: &Input, command_buffer: &mut Vec<Command>, bindings: &HashMap<Input, Command>) {	
-	if let Some(command) = bindings.get(input) {
-		command_buffer.push(*command);
-	}
 }
 
 fn main() {
@@ -234,7 +230,6 @@ fn main() {
 	let mut tanks: OptionVec<Tank> = OptionVec::new();
 
 	//Load the tank skeleton
-	let mut turret_origin = glm::zero();
 	let tank_skeleton = match routines::load_ozymesh("models/better_tank.ozy") {
 		Some(meshdata) => {
 			let mut node_list = Vec::with_capacity(meshdata.names.len());
@@ -242,14 +237,20 @@ fn main() {
 			let mut normal_maps = Vec::with_capacity(meshdata.names.len());
 			let mut roughness_maps = Vec::with_capacity(meshdata.names.len());
 			let mut bones = Vec::new();
+			let mut origins = vec![glm::zero(); 2];
 
 			//Load node info
 			for i in 0..meshdata.node_ids.len() {
-				let parent = if meshdata.parent_ids[i] == 0 {
+				let parent_id = meshdata.parent_ids[i] as usize;
+				let parent = if parent_id == 0 {
 					None
 				} else {
-					Some(meshdata.parent_ids[i] as usize - 1)
+					Some(parent_id - 1)
 				};
+
+				if meshdata.names[i] == "Turret" {
+					origins[Tank::TURRET_INDEX] = meshdata.origins[i];
+				}
 
 				if !node_list.contains(&(meshdata.node_ids[i] as usize - 1)) {
 					bones.push(Bone {
@@ -270,14 +271,6 @@ fn main() {
 				//Load roughness map
 				let roughness_id = unsafe { texture_keeper.fetch_texture(&meshdata.texture_names[i], "roughness") };
 				roughness_maps.push(roughness_id);
-
-				//Also get turret_origin
-				if meshdata.names[i] == "Turret" {
-					turret_origin = meshdata.origins[i];
-				}
-			}
-			if turret_origin == glm::zero() {
-				println!("No mesh named \"Turret\" when loading the tank.");
 			}
 
 			//Create the vertex array object
@@ -289,7 +282,8 @@ fn main() {
 				albedo_maps,
 				normal_maps,
 				roughness_maps,
-				bones
+				bones,
+				bone_origins: origins
 			}
 		}
 		None => {
@@ -468,7 +462,7 @@ fn main() {
 				vec![
 					("Toggle wireframe", Some(Command::ToggleWireframe)),
 					("Toggle blur", Some(Command::ToggleBlur)),
-					("Toggle collision volumes", None)
+					("Toggle collision volume rendering", None)
 				],
 				UIAnchor::LeftAligned(20.0, 20.0)
 			);
@@ -555,11 +549,11 @@ fn main() {
 	//Effect to use during the image effect step
 	let mut image_effect = ImageEffect::None;
 
-	let sphere_segments = 32;
-	let sphere_rings = 32;
-	let sphere_vao = prims::sphere_vao(1.0, sphere_segments, sphere_rings);
+	//Hit sphere visualization data
+	let sphere_segments = 16;
+	let sphere_rings = 16;
+	let sphere_vao = prims::sphere_vao(Tank::HIT_SPHERE_RADIUS, sphere_segments, sphere_rings);
 	let sphere_index_count = prims::sphere_index_count(sphere_segments, sphere_rings);
-	let mut sphere_transform = glm::translation(&glm::vec3(0.0, 0.5, 0.0));
 
 	//Main loop
     while !window.should_close() {
@@ -770,10 +764,10 @@ fn main() {
 
 				let mut player_origin = glm::vec4(0.0, 0.0, 0.0, 1.0);
 				if let Some(tank) = &tanks[player_tank_id] {
-					player_origin = tank.bones[0].transform * turret_origin;
+					player_origin = tank.bones[Tank::HULL_INDEX].transform * tank_skeleton.bone_origins[Tank::TURRET_INDEX];
 				}
 
-				//Update the tanks				
+				//Update the tanks
 				for j in 0..tanks.len() {
 					if let Some(tank) = tanks.get_mut_element(j) {
 						//Check if tank collided with any shells
@@ -794,15 +788,15 @@ fn main() {
 							)
 						};
 
-						tank.bones[0].transform = glm::translation(&tank.position) * tank.rotation;
+						tank.bones[Tank::HULL_INDEX].transform = glm::translation(&tank.position) * tank.rotation;
 						
-						tank.turret_origin = tank.bones[0].transform * turret_origin;
 						let aim_target;
 						match &mut tank.brain {
 							Brain::PlayerInput => {
 								//Simple ray-plane intersection.
 								let plane_normal = glm::vec3(0.0, 1.0, 0.0);
-								let t = glm::dot(&glm::vec4_to_vec3(&(tank.turret_origin - world_space_mouse)), &plane_normal) / glm::dot(&glm::vec4_to_vec3(&world_space_look_direction), &plane_normal);
+								let world_space_turret = tank.bones[Tank::HULL_INDEX].transform * tank_skeleton.bone_origins[Tank::TURRET_INDEX];
+								let t = glm::dot(&glm::vec4_to_vec3(&(world_space_turret - world_space_mouse)), &plane_normal) / glm::dot(&glm::vec4_to_vec3(&world_space_look_direction), &plane_normal);
 								let intersection = world_space_mouse + t * world_space_look_direction;
 
 								//Point the turret at the mouse cursor
@@ -882,9 +876,6 @@ fn main() {
 										);
 					}
 				}
-
-				//Update the sphere
-				sphere_transform = glm::translation(&glm::vec3(0.0, 0.5, 0.0)) * glm::rotation(elapsed_time / 2.0, &glm::vec3(1.0, 0.0, 0.0));
 			}
 			GameStateKind::MainMenu => { use_cached_3D_render = frame_count != snapshot_frame; }
 			GameStateKind::Paused => { use_cached_3D_render = frame_count != snapshot_frame; }
@@ -962,6 +953,7 @@ fn main() {
 				//Bind program for texture-mapped objects
 				gl::UseProgram(mapped_shader);
 				
+				//Bind the shadow map's data
 				gl::ActiveTexture(gl::TEXTURE3);
 				gl::BindTexture(gl::TEXTURE_2D, shadow_rendertarget.texture);
 
@@ -993,10 +985,6 @@ fn main() {
 				//Render tank shells
 				gl::UseProgram(mapped_instanced_shader);
 
-				//Bind the shadow map's data
-				gl::ActiveTexture(gl::TEXTURE3);
-				gl::BindTexture(gl::TEXTURE_2D, shadow_rendertarget.texture);
-
 				//Bind the vertex array
 				gl::BindVertexArray(shell_mesh.vao);
 
@@ -1007,12 +995,17 @@ fn main() {
 				}
 				gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
 
-				//Render transparent geometry
+				//Render tank spheres
 				gl::UseProgram(prim_shader);
 				gl::BindVertexArray(sphere_vao);
-				glutil::bind_matrix4(prim_shader, "mvp", &(screen_state.clipping_from_world * sphere_transform));
 				glutil::bind_vector4(prim_shader, "color", &glm::vec4(0.0, 0.0, 1.0, 0.5));
-				gl::DrawElements(gl::TRIANGLES, sphere_index_count as GLint, gl::UNSIGNED_SHORT, ptr::null());
+				for i in 0..tanks.len() {
+					if let Some(tank) = &tanks[i] {
+						let trans = glm::translation(&glm::vec4_to_vec3(&tank_skeleton.bone_origins[Tank::TURRET_INDEX]));
+						glutil::bind_matrix4(prim_shader, "mvp", &(screen_state.clipping_from_world * tank.bones[Tank::TURRET_INDEX].transform * trans));
+						gl::DrawElements(gl::TRIANGLES, sphere_index_count as GLint, gl::UNSIGNED_SHORT, ptr::null());
+					}
+				}
 
 				//-----------Apply post-processing effects-----------
 				gl::PolygonMode(gl::FRONT_AND_BACK, gl::FILL);			//Disable wireframe rendering for this section if it was enabled

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 pub type Input = (InputKind, glfw::Action);
 
 #[derive(PartialEq, Eq, Hash, Clone)]
@@ -23,4 +25,10 @@ pub enum Command {
     ToggleBlur,
     StartPlaying,
     ReturnToMainMenu
+}
+
+pub fn submit_input_command(input: &Input, command_buffer: &mut Vec<Command>, bindings: &HashMap<Input, Command>) {	
+	if let Some(command) = bindings.get(input) {
+		command_buffer.push(*command);
+	}
 }
