@@ -22,6 +22,8 @@ pub enum Command {
     AppendToMenuChain(usize, usize),
     MenuChainRollback(usize),
     ToggleFullScreen,
+    #[cfg(dev_tools)]
+    ToggleCollisionVolumes,
     ToggleBlur,
     StartPlaying,
     ReturnToMainMenu

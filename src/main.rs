@@ -188,7 +188,7 @@ fn main() {
 	let gaussian_shader = unsafe { glutil::compile_program_from_files("shaders/postprocessing.vert", "shaders/gaussian_blur.frag") };
 	let ui_shader = unsafe { glutil::compile_program_from_files("shaders/ui_button.vert", "shaders/ui_button.frag") };
 	let prim_shader = unsafe { glutil::compile_program_from_files("shaders/prim.vert", "shaders/prim.frag") };
-	let prim_shadow_shader = unsafe { glutil::compile_program_from_files("shaders/prim.vert", "shaders/shadow.frag") };
+	let prim_instanced_shader = unsafe { glutil::compile_program_from_files("shaders/prim_instanced.vert", "shaders/prim.frag") };
 	let edit_shader = unsafe { glutil::compile_program_from_files("shaders/mapped.vert", "shaders/edit.frag") };
 
 	//Initialize texture caching data structure
@@ -462,7 +462,7 @@ fn main() {
 				vec![
 					("Toggle wireframe", Some(Command::ToggleWireframe)),
 					("Toggle blur", Some(Command::ToggleBlur)),
-					("Toggle collision volume rendering", None)
+					("Toggle collision volume rendering", Some(Command::ToggleCollisionVolumes))
 				],
 				UIAnchor::LeftAligned(20.0, 20.0)
 			);
@@ -550,9 +550,10 @@ fn main() {
 	let mut image_effect = ImageEffect::None;
 
 	//Hit sphere visualization data
+	let mut draw_collision = false;
 	let sphere_segments = 16;
 	let sphere_rings = 16;
-	let sphere_vao = prims::sphere_vao(Tank::HIT_SPHERE_RADIUS, sphere_segments, sphere_rings);
+	let sphere_vao = prims::sphere_vao(1.0, sphere_segments, sphere_rings);
 	let sphere_index_count = prims::sphere_index_count(sphere_segments, sphere_rings);
 
 	//Main loop
@@ -608,6 +609,8 @@ fn main() {
 			match command {
 				Command::Quit => { window.set_should_close(true); }
 				Command::ToggleWireframe => { is_wireframe = !is_wireframe; }
+				#[cfg(dev_tools)]
+				Command::ToggleCollisionVolumes => { draw_collision = !draw_collision; }
 				Command::ToggleBlur => { 
 					image_effect = match image_effect {
 						ImageEffect::Blur => ImageEffect::None,
@@ -764,7 +767,7 @@ fn main() {
 
 				let mut player_origin = glm::vec4(0.0, 0.0, 0.0, 1.0);
 				if let Some(tank) = &tanks[player_tank_id] {
-					player_origin = tank.bones[Tank::HULL_INDEX].transform * tank_skeleton.bone_origins[Tank::TURRET_INDEX];
+					player_origin = tank.bone_transforms[Tank::HULL_INDEX] * tank_skeleton.bone_origins[Tank::TURRET_INDEX];
 				}
 
 				//Update the tanks
@@ -788,14 +791,14 @@ fn main() {
 							)
 						};
 
-						tank.bones[Tank::HULL_INDEX].transform = glm::translation(&tank.position) * tank.rotation;
+						tank.bone_transforms[Tank::HULL_INDEX] = glm::translation(&tank.position) * tank.rotation;
 						
 						let aim_target;
 						match &mut tank.brain {
 							Brain::PlayerInput => {
 								//Simple ray-plane intersection.
 								let plane_normal = glm::vec3(0.0, 1.0, 0.0);
-								let world_space_turret = tank.bones[Tank::HULL_INDEX].transform * tank_skeleton.bone_origins[Tank::TURRET_INDEX];
+								let world_space_turret = tank.bone_transforms[Tank::HULL_INDEX] * tank_skeleton.bone_origins[Tank::TURRET_INDEX];
 								let t = glm::dot(&glm::vec4_to_vec3(&(world_space_turret - world_space_mouse)), &plane_normal) / glm::dot(&glm::vec4_to_vec3(&world_space_look_direction), &plane_normal);
 								let intersection = world_space_mouse + t * world_space_look_direction;
 
@@ -814,15 +817,15 @@ fn main() {
 
 						//Fire a shell if the tank's firing flag is set and if the tank is not in cooldown
 						if tank.firing {
-							tank.firing = mouse_rbutton_pressed;
 							let timer_expired = elapsed_time > tank.last_shot_time + Tank::SHOT_COOLDOWN;			//Has this tank cooled down from its last shot?
 							let shell_buffer_has_room = shells.count() < maximum_live_shells;						//Does the shell buffer have room?
 
 							//If all conditions are met, fire a shell
-							if timer_expired && shell_buffer_has_room {
+							let turbo = j == player_tank_id && mouse_rbutton_pressed;
+							if (timer_expired || turbo) && shell_buffer_has_room {
 								tank.last_shot_time = elapsed_time;
 	
-								let transform = tank.bones[Tank::TURRET_INDEX].transform;
+								let transform = tank.bone_transforms[Tank::TURRET_INDEX];
 								let position = transform * glm::vec4(0.0, 0.0, 0.0, 1.0);
 								let velocity = tank.turret_forward * Shell::VELOCITY;
 	
@@ -833,6 +836,7 @@ fn main() {
 									spawn_time: elapsed_time as f32
 								});								
 							}
+							tank.firing = turbo;
 						}
 					}
 				}
@@ -929,7 +933,7 @@ fn main() {
 					if let Some(tank) = &tanks[i] {
 						for j in 0..tank.skeleton.node_list.len() {
 							let node_index = tank.skeleton.node_list[j];
-							glutil::bind_matrix4(shadow_shader, "mvp", &(shadow_matrix * tank.bones[node_index].transform));
+							glutil::bind_matrix4(shadow_shader, "mvp", &(shadow_matrix * tank.bone_transforms[node_index]));
 
 							tank.skeleton.draw_bone(j);
 						}
@@ -973,8 +977,8 @@ fn main() {
 					if let Some(tank) = &tanks[i] {
 						for j in 0..tank.skeleton.node_list.len() {
 							let node_index = tank.skeleton.node_list[j];
-							glutil::bind_matrix4(mapped_shader, "mvp", &(screen_state.clipping_from_world * tank.bones[node_index].transform));
-							glutil::bind_matrix4(mapped_shader, "model_matrix", &tank.bones[node_index].transform);
+							glutil::bind_matrix4(mapped_shader, "mvp", &(screen_state.clipping_from_world * tank.bone_transforms[node_index]));
+							glutil::bind_matrix4(mapped_shader, "model_matrix", &tank.bone_transforms[node_index]);
 							bind_texture_maps(&[tank.skeleton.albedo_maps[j], tank.skeleton.normal_maps[j], tank.skeleton.roughness_maps[j]]);
 			
 							tank.skeleton.draw_bone(j);
@@ -995,15 +999,23 @@ fn main() {
 				}
 				gl::DrawElementsInstanced(gl::TRIANGLES, shell_mesh.index_count, gl::UNSIGNED_SHORT, ptr::null(), shells.count() as GLint);
 
-				//Render tank spheres
-				gl::UseProgram(prim_shader);
-				gl::BindVertexArray(sphere_vao);
-				glutil::bind_vector4(prim_shader, "color", &glm::vec4(0.0, 0.0, 1.0, 0.5));
-				for i in 0..tanks.len() {
-					if let Some(tank) = &tanks[i] {
-						let trans = glm::translation(&glm::vec4_to_vec3(&tank_skeleton.bone_origins[Tank::TURRET_INDEX]));
-						glutil::bind_matrix4(prim_shader, "mvp", &(screen_state.clipping_from_world * tank.bones[Tank::TURRET_INDEX].transform * trans));
-						gl::DrawElements(gl::TRIANGLES, sphere_index_count as GLint, gl::UNSIGNED_SHORT, ptr::null());
+				//Render collision volumes
+				#[cfg(dev_tools)]
+				{
+					if draw_collision {
+						gl::UseProgram(prim_shader);
+						gl::BindVertexArray(sphere_vao);
+						glutil::bind_vector4(prim_shader, "color", &glm::vec4(0.0, 0.0, 1.0, 0.5));
+						for i in 0..tanks.len() {
+							if let Some(tank) = &tanks[i] {
+								let trans = glm::translation(&glm::vec4_to_vec3(&tank_skeleton.bone_origins[Tank::TURRET_INDEX])) * glm::scaling(&glm::vec3(Tank::HIT_SPHERE_RADIUS, Tank::HIT_SPHERE_RADIUS, Tank::HIT_SPHERE_RADIUS));
+								glutil::bind_matrix4(prim_shader, "mvp", &(screen_state.clipping_from_world * tank.bone_transforms[Tank::TURRET_INDEX] * trans));
+								gl::DrawElements(gl::TRIANGLES, sphere_index_count as GLint, gl::UNSIGNED_SHORT, ptr::null());
+							}
+						}
+
+						gl::BindVertexArray(shell_mesh.vao);
+
 					}
 				}
 
