@@ -492,7 +492,7 @@ fn main() {
 	let mut title_section_index = ui_state.add_section(title_section.clone());
 
 	//Background music data
-	let bgm_path = "music/relaxing_botw.mp3";
+	let bgm_path = "music/factory.mp3";
 	let bgm_volume = 0.5;
 	let bgm_sink = match rodio::default_output_device() {
 		Some(device) => {
