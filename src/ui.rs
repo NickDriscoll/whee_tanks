@@ -252,13 +252,16 @@ impl<'a> UIState<'a> {
 	
 	pub fn update_screen_size(&mut self, size: (u32, u32)) {
 		for menu in self.menus.iter_mut() {
-			if let UIAnchor::DeadCenter(_) = menu.anchor {
-				let ugh = (size.0 as f32, size.1 as f32);
-				menu.anchor = UIAnchor::DeadCenter(ugh);
-				if menu.active {
-					menu.toggle(&mut self.internals);
-					menu.toggle(&mut self.internals);
+			match menu.anchor {
+				UIAnchor::DeadCenter(_) => {
+					let ugh = (size.0 as f32, size.1 as f32);
+					menu.anchor = UIAnchor::DeadCenter(ugh);
+					if menu.active {
+						menu.toggle(&mut self.internals);
+						menu.toggle(&mut self.internals);
+					}
 				}
+				_ => {}
 			}
 		}
 	}
@@ -495,7 +498,6 @@ impl<'a> Menu<'a> {
             active: false,
             ids: vec![0; size]
         }
-
 	}
 
     //Adds this menu's data to the arrays of buttons and sections
@@ -523,7 +525,7 @@ impl<'a> Menu<'a> {
             let height = bounding_box.height() + BORDER_WIDTH * 2.0;
 
             let button_bounds = match self.anchor {
-                UIAnchor::LeftAligned(x, y) => {
+                UIAnchor::LeftAligned((x, y)) => {
                     let x_pos = x;
                     let y_pos = y + i as f32 * (height + BUFFER_DISTANCE);
                     glyph_brush::Rectangle {
@@ -577,8 +579,8 @@ impl<'a> Menu<'a> {
 
 //Defines the anchor point of the UI element and how that anchor is configured
 pub enum UIAnchor {
-    LeftAligned(f32, f32),
-    DeadCenter((f32, f32))
+    LeftAligned((f32, f32)),			//Parameter is the screen-space position of the top-left corner of the entire menu's bounding box
+    DeadCenter((f32, f32))				//Parameter is the screen size in pixels
 }
 
 #[derive(PartialEq, Eq, Debug)]

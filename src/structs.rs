@@ -2,7 +2,7 @@ use gl::types::*;
 use std::clone::Clone;
 use std::collections::HashMap;
 use crate::input::{Command, InputKind};
-use crate::render::{Bone, Framebuffer, RenderTarget, Skeleton};
+use crate::render::{Framebuffer, RenderTarget, Skeleton};
 
 pub struct Tank<'a> {
     pub position: glm::TVec3<f32>,

@@ -19,15 +19,18 @@ pub struct StaticGeometry {
 //One contiguous piece of geometry
 pub struct SimpleMesh {
     pub vao: GLuint,
-    pub texture_maps: [GLuint; MAP_COUNT],
-    pub index_count: GLint
+    pub index_count: GLint,
+    pub origin: glm::TVec4<f32>,
+    pub texture_maps: [GLuint; MAP_COUNT]
 }
 
 impl SimpleMesh {
     pub fn new(vao: GLuint, texture_maps: [GLuint; MAP_COUNT], in_count: usize) -> Self {
         let index_count = in_count as GLint;
+        let origin = glm::zero();
         SimpleMesh {
             vao,
+            origin,
             texture_maps,
             index_count
         }
@@ -38,12 +41,14 @@ impl SimpleMesh {
             Some(meshdata) => unsafe {
                 let vao = glutil::create_vertex_array_object(&meshdata.vertex_array.vertices, &meshdata.vertex_array.indices, &meshdata.vertex_array.attribute_offsets);
                 let count = meshdata.geo_boundaries[1] as GLint;
+                let origin = meshdata.origins[0];
                 let albedo = texture_keeper.fetch_texture(&meshdata.texture_names[0], "albedo");
                 let normal = texture_keeper.fetch_texture(&meshdata.texture_names[0], "normal");
                 let roughness = texture_keeper.fetch_texture(&meshdata.texture_names[0], "roughness");
     
                 SimpleMesh {
                     vao,
+                    origin,
                     texture_maps: [albedo, normal, roughness],
                     index_count: count as GLint
                 }

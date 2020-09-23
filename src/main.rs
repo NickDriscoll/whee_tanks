@@ -1,3 +1,4 @@
+#![allow(non_snake_case)]
 extern crate nalgebra_glm as glm;
 use std::{mem, ptr};
 use std::collections::HashMap;
@@ -12,7 +13,7 @@ use rodio::{Sink};
 use ozy_engine::{glutil, prims, routines};
 use ozy_engine::structs::OptionVec;
 use crate::structs::*;
-use crate::input::{Command, Input, InputKind, {submit_input_command}};
+use crate::input::{Command, InputKind, {submit_input_command}};
 use crate::ui::{Menu, UIAnchor, UIState};
 use crate::render::{Bone, Framebuffer, RenderTarget, SimpleMesh, Skeleton, StaticGeometry, TextureKeeper};
 
@@ -311,14 +312,15 @@ fn main() {
 		//Attach this buffer to the shell_mesh vao
 		//We have to individually bind each column of the matrix as a different vec4 vertex attribute
 		for i in 0..4 {
-			gl::VertexAttribPointer(5 + i,
+			let attribute_index = 5 + i;
+			gl::VertexAttribPointer(attribute_index,
 									4,
 									gl::FLOAT,
 									gl::FALSE,
 									(16 * mem::size_of::<GLfloat>()) as GLsizei,
 									(i * 4 * mem::size_of::<GLfloat>() as GLuint) as *const c_void);
-			gl::EnableVertexAttribArray(5 + i);
-			gl::VertexAttribDivisor(5 + i, 1);
+			gl::EnableVertexAttribArray(attribute_index);
+			gl::VertexAttribDivisor(attribute_index, 1);
 		}
 
 		b
@@ -330,7 +332,7 @@ fn main() {
 	//Frame timing data
 	let mut last_frame_instant = Instant::now();
 	let mut frame_count = 0;
-	let mut snapshot_frame = 0;	//The frame on which the cached 3D render will be re-rendered
+	let mut snapshot_frame = 0;	//The frame on which the cached 3D render will be evicted
 	let mut elapsed_time = 0.0;	//This only increments when the game is actually playing
 
 	let mut is_wireframe = false;
@@ -464,7 +466,7 @@ fn main() {
 					("Toggle blur", Some(Command::ToggleBlur)),
 					("Toggle collision volume rendering", Some(Command::ToggleCollisionVolumes))
 				],
-				UIAnchor::LeftAligned(20.0, 20.0)
+				UIAnchor::LeftAligned((20.0, 20.0))
 			);
 			menus.push(menu);
 		}
@@ -492,7 +494,7 @@ fn main() {
 	let mut title_section_index = ui_state.add_section(title_section.clone());
 
 	//Background music data
-	let bgm_path = "music/factory.mp3";
+	let bgm_path = "music/relaxing_botw.mp3";
 	let bgm_volume = 0.5;
 	let bgm_sink = match rodio::default_output_device() {
 		Some(device) => {
@@ -551,10 +553,35 @@ fn main() {
 
 	//Hit sphere visualization data
 	let mut draw_collision = false;
-	let sphere_segments = 16;
-	let sphere_rings = 16;
-	let sphere_vao = prims::sphere_vao(1.0, sphere_segments, sphere_rings);
-	let sphere_index_count = prims::sphere_index_count(sphere_segments, sphere_rings);
+	let sphere_vao = prims::sphere_vao(1.0, 12, 12);
+	let sphere_index_count = prims::sphere_index_count(12, 12);
+
+	//Allocate GPU buffer for instanced matrices
+	let maximum_collision_spheres = 10000;
+	let collision_sphere_instanced_transforms = unsafe {
+		gl::BindVertexArray(sphere_vao);
+
+		let mut b = 0;
+		gl::GenBuffers(1, &mut b);
+		gl::BindBuffer(gl::ARRAY_BUFFER, b);
+		gl::BufferData(gl::ARRAY_BUFFER, (maximum_collision_spheres * 16 * mem::size_of::<GLfloat>()) as GLsizeiptr, ptr::null(), gl::DYNAMIC_DRAW);
+
+		//Attach this buffer to the shell_mesh vao
+		//We have to individually bind each column of the matrix as a different vec4 vertex attribute
+		for i in 0..4 {
+			let attribute_index = 2 + i;
+			gl::VertexAttribPointer(attribute_index,
+									4,
+									gl::FLOAT,
+									gl::FALSE,
+									(16 * mem::size_of::<GLfloat>()) as GLsizei,
+									(i * 4 * mem::size_of::<GLfloat>() as GLuint) as *const c_void);
+			gl::EnableVertexAttribArray(attribute_index);
+			gl::VertexAttribDivisor(attribute_index, 1);
+		}
+
+		b
+	};
 
 	//Main loop
     while !window.should_close() {
@@ -700,7 +727,8 @@ fn main() {
 					player_tank_id = {
 						let tank_forward = glm::vec3(-1.0, 0.0, 0.0);
 						let tank_position = glm::vec3(-4.5, 0.0, 0.0);
-						let tank = Tank::new(tank_position, tank_forward, &tank_skeleton, Brain::PlayerInput);
+						let mut tank = Tank::new(tank_position, tank_forward, &tank_skeleton, Brain::PlayerInput);
+						tank.last_shot_time = -Tank::SHOT_COOLDOWN;
 						tanks.insert(tank)
 					};
 
@@ -760,8 +788,12 @@ fn main() {
 		}
 
 		//-----------Simulating-----------
+		let hit_volume_count;
 		match game_state.kind {
 			GameStateKind::Playing => {
+				let floats_per_transform = 16;
+				let mut hit_transforms = Vec::with_capacity(tanks.count() + shells.count());
+
 				elapsed_time += delta_time;
 				use_cached_3D_render = false;
 
@@ -838,13 +870,20 @@ fn main() {
 							}
 							tank.firing = turbo;
 						}
+
+						//Add the tank's hit-sphere transform to the buffer
+						let hit_transform = tank.bone_transforms[Tank::TURRET_INDEX] *
+											glm::translation(&glm::vec4_to_vec3(&tank_skeleton.bone_origins[Tank::TURRET_INDEX])) *
+											routines::uniform_scale(Tank::HIT_SPHERE_RADIUS);
+						for i in 0..floats_per_transform {
+							hit_transforms.push(hit_transform[i]);
+						}
 					}
 				}
 
 				//Update shells
-				let floats_per_transform = 16;
-				let mut shell_transforms = vec![0.0; shells.count() * floats_per_transform];
 				let mut current_shell = 0;
+				let mut shell_transforms = vec![0.0; shells.count() * floats_per_transform];
 				for i in 0..shells.len() {
 					if let Some(shell) = shells.get_mut_element(i) {
 						//Check if the shell needs to be de-spawned
@@ -861,9 +900,12 @@ fn main() {
 						shell.transform[13] = shell.position.y;
 						shell.transform[14] = shell.position.z;
 
+						let hit_transform = shell.transform * glm::translation(&glm::vec4_to_vec3(&shell_mesh.origin)) * routines::uniform_scale(0.25);
+
 						//Fill the transform buffer used for instanced rendering
 						for j in 0..floats_per_transform {
 							shell_transforms[current_shell * floats_per_transform + j] = shell.transform[j];
+							hit_transforms.push(hit_transform[j]);
 						}
 						current_shell += 1;
 					}
@@ -874,9 +916,21 @@ fn main() {
 					unsafe {
 						gl::BindBuffer(gl::ARRAY_BUFFER, shell_instanced_transforms);
 						gl::BufferSubData(gl::ARRAY_BUFFER,
-										0 as GLsizeiptr, 
+										0 as GLsizeiptr,
 										(shell_transforms.len() * mem::size_of::<GLfloat>()) as GLsizeiptr,
 										&shell_transforms[0] as *const GLfloat as *const c_void
+										);
+					}
+				}
+
+				//Update GPU buffer storing hit volume transforms
+				if hit_transforms.len() > 0 {
+					unsafe {
+						gl::BindBuffer(gl::ARRAY_BUFFER, collision_sphere_instanced_transforms);
+						gl::BufferSubData(gl::ARRAY_BUFFER,
+										0 as GLsizeiptr,
+										(hit_transforms.len() * mem::size_of::<GLfloat>()) as GLsizeiptr,
+										&hit_transforms[0] as *const GLfloat as *const c_void
 										);
 					}
 				}
@@ -885,6 +939,7 @@ fn main() {
 			GameStateKind::Paused => { use_cached_3D_render = frame_count != snapshot_frame; }
 		}
 		last_mouse_lbutton_pressed = mouse_lbutton_pressed;
+		hit_volume_count = tanks.count() + shells.count();
 
 		//-----------CPU-side UI element rendering-----------
 		ui_state.synchronize();
@@ -911,6 +966,8 @@ fn main() {
 				initialize_texture_samplers(passthrough_shader, &["image_texture"]);
 				initialize_texture_samplers(gaussian_shader, &["image_texture"]);
 				initialize_texture_samplers(glyph_shader, &["glyph_texture"]);
+				glutil::bind_vector4(prim_instanced_shader, "color", &glm::vec4(0.0, 0.0, 1.0, 0.5));
+				glutil::bind_matrix4(prim_instanced_shader, "view_projection", &screen_state.clipping_from_world);
 
 				//-----------Shadow map rendering-----------
 
@@ -1003,19 +1060,9 @@ fn main() {
 				#[cfg(dev_tools)]
 				{
 					if draw_collision {
-						gl::UseProgram(prim_shader);
+						gl::UseProgram(prim_instanced_shader);
 						gl::BindVertexArray(sphere_vao);
-						glutil::bind_vector4(prim_shader, "color", &glm::vec4(0.0, 0.0, 1.0, 0.5));
-						for i in 0..tanks.len() {
-							if let Some(tank) = &tanks[i] {
-								let trans = glm::translation(&glm::vec4_to_vec3(&tank_skeleton.bone_origins[Tank::TURRET_INDEX])) * glm::scaling(&glm::vec3(Tank::HIT_SPHERE_RADIUS, Tank::HIT_SPHERE_RADIUS, Tank::HIT_SPHERE_RADIUS));
-								glutil::bind_matrix4(prim_shader, "mvp", &(screen_state.clipping_from_world * tank.bone_transforms[Tank::TURRET_INDEX] * trans));
-								gl::DrawElements(gl::TRIANGLES, sphere_index_count as GLint, gl::UNSIGNED_SHORT, ptr::null());
-							}
-						}
-
-						gl::BindVertexArray(shell_mesh.vao);
-
+						gl::DrawElementsInstanced(gl::TRIANGLES, sphere_index_count as GLint, gl::UNSIGNED_SHORT, ptr::null(), hit_volume_count as GLint);
 					}
 				}
 

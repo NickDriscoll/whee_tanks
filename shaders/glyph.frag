@@ -8,6 +8,5 @@ out vec4 frag_color;
 uniform sampler2D glyph_texture;
 
 void main() {
-    float intensity = texture(glyph_texture, f_uvs).r;
-    frag_color = f_color * intensity;
+    frag_color = f_color * texture(glyph_texture, f_uvs).r;
 }
