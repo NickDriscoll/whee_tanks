@@ -60,6 +60,78 @@ impl SimpleMesh {
     }
 }
 
+pub struct InstancedMesh {
+    vao: GLuint,
+    transform_buffer: GLuint,    
+    index_count: GLint,
+    active_instances: usize,
+    max_instances: usize
+}
+
+impl InstancedMesh {
+    const FLOATS_PER_TRANSFORM: usize = 16;
+
+    pub fn new(vao: GLuint, index_count: GLint, max_instances: usize, instanced_attribute: GLuint) -> Self {
+        //Create GPU buffer for instanced matrices
+        let transform_buffer = unsafe {
+            gl::BindVertexArray(vao);
+
+            let mut b = 0;
+            gl::GenBuffers(1, &mut b);
+            gl::BindBuffer(gl::ARRAY_BUFFER, b);
+            gl::BufferData(gl::ARRAY_BUFFER, (max_instances * Self::FLOATS_PER_TRANSFORM * mem::size_of::<GLfloat>()) as GLsizeiptr, ptr::null(), gl::DYNAMIC_DRAW);
+
+            //Attach this buffer to the shell_mesh vao
+            //We have to individually bind each column of the matrix as a different vec4 vertex attribute
+            for i in 0..4 {
+                let attribute_index = instanced_attribute + i;
+                gl::VertexAttribPointer(attribute_index,
+                                        4,
+                                        gl::FLOAT,
+                                        gl::FALSE,
+                                        (Self::FLOATS_PER_TRANSFORM * mem::size_of::<GLfloat>()) as GLsizei,
+                                        (i * 4 * mem::size_of::<GLfloat>() as GLuint) as *const c_void);
+                gl::EnableVertexAttribArray(attribute_index);
+                gl::VertexAttribDivisor(attribute_index, 1);
+            }
+
+            b
+        };
+        
+        InstancedMesh {
+            vao,
+            max_instances,
+            index_count,
+            active_instances: 0,
+            transform_buffer
+        }
+    }
+
+    pub fn max_instances(&self) -> usize { self.max_instances }
+
+    pub unsafe fn render(&self) {
+        gl::BindVertexArray(self.vao);
+		gl::DrawElementsInstanced(gl::TRIANGLES, self.index_count, gl::UNSIGNED_SHORT, ptr::null(), self.active_instances as GLint);
+    }
+
+    pub fn update_buffer(&mut self, transforms: &[f32]) {
+        //Record the current active instance count
+        self.active_instances = transforms.len() / Self::FLOATS_PER_TRANSFORM;
+
+        //Update GPU buffer storing hit volume transforms
+		if transforms.len() > 0 {
+			unsafe {
+				gl::BindBuffer(gl::ARRAY_BUFFER, self.transform_buffer);
+				gl::BufferSubData(gl::ARRAY_BUFFER,
+								0 as GLsizeiptr,
+								(transforms.len() * mem::size_of::<GLfloat>()) as GLsizeiptr,
+								&transforms[0] as *const GLfloat as *const c_void
+								);
+			}
+		}
+    }
+}
+
 #[derive(Debug)]
 pub struct Skeleton {
     pub vao: GLuint,
