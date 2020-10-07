@@ -61,40 +61,6 @@ pub struct UIInternals<'a> {
     sections: OptionVec<Section<'a>>
 }
 
-impl<'a> UIInternals<'a> {
-    pub fn new(glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>) -> Self {
-        UIInternals {
-            vao_flag: false,
-            glyph_brush,
-            buttons: OptionVec::new(),
-            sections: OptionVec::new()
-        }
-    }
-
-    pub fn add_button(&mut self, button: UIButton) -> usize {
-        self.vao_flag = true;
-        self.buttons.insert(button)
-    }
-
-    pub fn add_section(&mut self, section: Section<'a>) -> usize {
-        self.vao_flag = true;
-        self.sections.insert(section)
-    }
-
-    pub fn delete_button(&mut self, index: usize) {
-        self.vao_flag = true;
-        if let Some(button) = &self.buttons[index] {
-            self.sections.delete(button.section_id());
-            self.buttons.delete(index);
-        }
-    }
-
-    pub fn delete_section(&mut self, index: usize) {
-        self.vao_flag = true;
-        self.sections.delete(index);
-    }
-}
-
 pub struct UIState<'a> {
     pub button_color_buffer: GLuint,
     pub buttons_vao: Option<GLuint>,
@@ -110,7 +76,7 @@ impl<'a> UIState<'a> {
     pub const FLOATS_PER_COLOR: usize = 4;
     pub const COLORS_PER_BUTTON: usize = 4;
 
-    pub fn new(menus: Vec<Menu<'a>>, glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>) -> Self {
+    pub fn new(glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>) -> Self {
         //Create the glyph texture
         let glyph_texture = unsafe {
             let (width, height) = glyph_brush.texture_dimensions();
@@ -134,7 +100,7 @@ impl<'a> UIState<'a> {
             glyph_vao: None,
 			glyph_count: 0,
 			menu_chains: Vec::new(),
-            menus
+            menus: Vec::new()
         }
     }
     
@@ -152,15 +118,18 @@ impl<'a> UIState<'a> {
 
     pub fn button_count(&self) -> usize { self.internals.buttons.count() }
 
-	pub fn create_menu_chain(&mut self, dst: usize) -> usize {
+	pub fn create_menu_chain(&mut self) -> usize {
 		let mut chain = Vec::new();
-		chain.push(dst);
 		self.menu_chains.push(chain);
-		self.show_menu(dst);
 		self.menu_chains.len() - 1
 	}
 
 	pub fn delete_section(&mut self, index: usize) { self.internals.delete_section(index); }
+
+	pub fn display_screen(&mut self, section: Section<'a>, menu: usize, chain: usize) -> usize {		
+		self.append_to_chain(chain, menu);
+		self.add_section(section)
+	}
 
     pub fn hide_all_menus(&mut self) {
         for menu in self.menus.iter_mut() {
@@ -168,7 +137,12 @@ impl<'a> UIState<'a> {
         }
     }
 
-	pub fn hide_menu(&mut self, index: usize) { self.menus[index].hide(&mut self.internals); }
+	fn hide_menu(&mut self, index: usize) { self.menus[index].hide(&mut self.internals); }
+
+	pub fn hide_screen(&mut self, section_index: usize, chain: usize) {
+		self.rollback_chain(chain);
+		self.delete_section(section_index);
+	}
 
     //Clears the data in self.internals and marks all menus as inactive
     pub fn reset(&mut self) {
@@ -185,13 +159,20 @@ impl<'a> UIState<'a> {
 	
 	pub fn rollback_chain(&mut self, chain: usize) {
 		if let Some(index) = self.menu_chains[chain].pop() {
-			let dst = self.menu_chains[chain][self.menu_chains[chain].len() - 1];
 			self.hide_menu(index);
-			self.show_menu(dst);
+			
+			if self.menu_chains[chain].len() > 0 {
+				let dst = self.menu_chains[chain][self.menu_chains[chain].len() - 1];
+				self.show_menu(dst);
+			}
 		}
 	}
 
-	pub fn show_menu(&mut self, index: usize) { self.menus[index].show(&mut self.internals); }
+	pub fn set_menus(&mut self, menus: Vec<Menu<'a>>) {
+		self.menus = menus;
+	}
+
+	fn show_menu(&mut self, index: usize) { self.menus[index].show(&mut self.internals); }
 
 	//Call this function each frame right before rendering
     pub fn synchronize(&mut self) {
@@ -205,7 +186,13 @@ impl<'a> UIState<'a> {
 		self.update_button_vao();
     }
 
-    pub fn toggle_menu(&mut self, index: usize) { self.menus[index].toggle(&mut self.internals); }
+    pub fn toggle_menu(&mut self, chain: usize, menu: usize) {
+		if self.menus[menu].active {
+			self.rollback_chain(chain);
+		} else {
+			self.append_to_chain(chain, menu);
+		}
+	}
 
     //Gets input from the UI system and generates Commands for the command buffer I.E. user clicking on buttons
     //Also updates the instanced color buffer used for rendering the buttons
@@ -424,6 +411,40 @@ impl<'a> UIState<'a> {
                         (Self::COLORS_PER_BUTTON * Self::FLOATS_PER_COLOR * index * mem::size_of::<GLfloat>()) as GLintptr,
                         (Self::FLOATS_PER_COLOR * Self::COLORS_PER_BUTTON * mem::size_of::<GLfloat>()) as GLsizeiptr,
                         &data[0] as *const GLfloat as *const c_void);
+    }
+}
+
+impl<'a> UIInternals<'a> {
+    pub fn new(glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>) -> Self {
+        UIInternals {
+            vao_flag: false,
+            glyph_brush,
+            buttons: OptionVec::new(),
+            sections: OptionVec::new()
+        }
+    }
+
+    pub fn add_button(&mut self, button: UIButton) -> usize {
+        self.vao_flag = true;
+        self.buttons.insert(button)
+    }
+
+    pub fn add_section(&mut self, section: Section<'a>) -> usize {
+        self.vao_flag = true;
+        self.sections.insert(section)
+    }
+
+    pub fn delete_button(&mut self, index: usize) {
+        self.vao_flag = true;
+        if let Some(button) = &self.buttons[index] {
+            self.sections.delete(button.section_id());
+            self.buttons.delete(index);
+        }
+    }
+
+    pub fn delete_section(&mut self, index: usize) {
+        self.vao_flag = true;
+        self.sections.delete(index);
     }
 }
 

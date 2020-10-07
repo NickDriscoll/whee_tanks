@@ -18,7 +18,7 @@ pub enum Command {
     Fire,
     PauseGame,
     UnPauseGame,
-    ToggleMenu(usize),
+    ToggleMenu(usize, usize),
     AppendToMenuChain(usize, usize),
     MenuChainRollback(usize),
     ToggleFullScreen,

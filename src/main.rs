@@ -381,6 +381,22 @@ fn main() {
 	let mut mouse_rbutton_pressed = false;
 	let mut last_mouse_lbutton_pressed = false;
 
+	//Title text
+	let mut title_section = {
+		let font_size = 72.0;
+		let section = Section::new();
+		let mut text = Text::new(game_title).with_color([1.0, 1.0, 1.0, 1.0]);
+		text.scale = PxScale::from(font_size);
+		let mut section = section.add_text(text);
+	
+		let bounding_box = glyph_brush.glyph_bounds(&section).unwrap();
+		section.screen_position = (
+			screen_state.window_size.0 as f32 / 2.0 - bounding_box.width() / 2.0,
+			40.0
+		);
+		section
+	};
+
 	//Hardcoded menu indices
 	let main_menu_index = 0;
 	let pause_menu_index = 1;
@@ -390,10 +406,15 @@ fn main() {
 	let dev_menu_index = 3;
 
 	//Hardcoded menu chain indices
-	let main_menu_chain_index = 0;
+	let main_chain_index;
+	let dev_chain_index;
 
 	//Data structure of all UI state
 	let mut ui_state = {
+		let mut state = UIState::new(&mut glyph_brush);
+		main_chain_index = state.create_menu_chain();
+		dev_chain_index = state.create_menu_chain();
+
 		let mut menus = Vec::new();
 
 		let float_window_size = (screen_state.window_size.0 as f32, screen_state.window_size.1 as f32);
@@ -403,7 +424,7 @@ fn main() {
 			vec![
 				("Singleplayer", Some(Command::StartPlaying)),
 				("Multiplayer", None),
-				("Settings", Some(Command::AppendToMenuChain(main_menu_chain_index, settings_menu_index))),
+				("Settings", Some(Command::AppendToMenuChain(main_chain_index, settings_menu_index))),
 				("Exit", Some(Command::Quit)),
 			],
 			UIAnchor::DeadCenter(float_window_size)
@@ -414,7 +435,7 @@ fn main() {
 		let menu = Menu::new(
 			vec![
 				("Resume", Some(Command::UnPauseGame)),
-				("Settings", Some(Command::AppendToMenuChain(main_menu_chain_index, settings_menu_index))),
+				("Settings", Some(Command::AppendToMenuChain(main_chain_index, settings_menu_index))),
 				("Main Menu", Some(Command::ReturnToMainMenu)),
 				("Exit", Some(Command::Quit)),
 			],
@@ -426,7 +447,7 @@ fn main() {
 		let menu = Menu::new(
 			vec![
 				("Toggle fullscreen", Some(Command::ToggleFullScreen)),
-				("Back", Some(Command::MenuChainRollback(main_menu_chain_index))),
+				("Back", Some(Command::MenuChainRollback(main_chain_index))),
 			],
 			UIAnchor::DeadCenter(float_window_size)
 		);
@@ -446,30 +467,15 @@ fn main() {
 			menus.push(menu);
 		}
 
-		let mut state = UIState::new(menus, &mut glyph_brush);
-		state.create_menu_chain(main_menu_index);
-		state
-	};
+		//Set the ui_state to use these menus
+		state.set_menus(menus);
 
-	//Title text
-	let mut title_section = {
-		let font_size = 72.0;
-		let section = Section::new();
-		let mut text = Text::new(game_title).with_color([1.0, 1.0, 1.0, 1.0]);
-		text.scale = PxScale::from(font_size);
-		let mut section = section.add_text(text);
-	
-		let bounding_box = ui_state.internals.glyph_brush.glyph_bounds(&section).unwrap();
-		section.screen_position = (
-			screen_state.window_size.0 as f32 / 2.0 - bounding_box.width() / 2.0,
-			40.0
-		);
-		section
-	};
-	let mut title_section_index = ui_state.add_section(title_section.clone());
+		state
+	};	
+	let mut title_section_index = ui_state.display_screen(title_section.clone(), main_menu_index, main_chain_index);
 
 	//Background music data
-	let bgm_path = "music/spirit_temple.mp3";
+	let bgm_path = "music/dark_ruins.mp3";
 	let bgm_volume = 0.25;
 	let bgm_sink = match rodio::default_output_device() {
 		Some(device) => {
@@ -495,7 +501,7 @@ fn main() {
 			map.insert((InputKind::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
 			
 			#[cfg(dev_tools)]
-			map.insert((InputKind::Key(Key::GraveAccent), Action::Press), Command::ToggleMenu(dev_menu_index));
+			map.insert((InputKind::Key(Key::GraveAccent), Action::Press), Command::ToggleMenu(dev_chain_index, dev_menu_index));
 
 			//The keys here depend on the earlier bindings
 			map.insert((InputKind::Key(Key::W), Action::Release), Command::MovePlayerTank(Tank::SPEED));
@@ -514,7 +520,7 @@ fn main() {
 			map.insert((InputKind::Key(Key::Escape), Action::Press), Command::UnPauseGame);
 
 			#[cfg(dev_tools)]
-			map.insert((InputKind::Key(Key::GraveAccent), Action::Press), Command::ToggleMenu(dev_menu_index));
+			map.insert((InputKind::Key(Key::GraveAccent), Action::Press), Command::ToggleMenu(dev_chain_index, dev_menu_index));
 
 			map
 		};
@@ -621,6 +627,9 @@ fn main() {
 					ui_state.delete_section(title_section_index);
 					title_section_index = ui_state.add_section(title_section.clone());
 				}
+				Command::ToggleMenu(chain, menu) => {
+					ui_state.toggle_menu(chain, menu);
+				}
 				Command::MovePlayerTank(speed) => {
 					if let Some(tank) = tanks.get_mut_element(player_tank_id) {
 						tank.speed += speed;
@@ -641,8 +650,7 @@ fn main() {
 					}
 					
 					//Enable the pause menu
-					ui_state.append_to_chain(main_menu_chain_index, pause_menu_index);
-					title_section_index = ui_state.add_section(title_section.clone());
+					title_section_index = ui_state.display_screen(title_section.clone(), pause_menu_index, main_chain_index);
 	
 					game_state.kind = GameStateKind::Paused;
 					image_effect = ImageEffect::Blur;
@@ -652,8 +660,7 @@ fn main() {
 				}
 				Command::UnPauseGame => {
 					//Hide pause menu
-					ui_state.hide_menu(pause_menu_index);
-					ui_state.delete_section(title_section_index);
+					ui_state.hide_screen(title_section_index, main_chain_index);
 
 					game_state.kind = GameStateKind::Playing;							
 					image_effect = ImageEffect::None;
@@ -668,6 +675,7 @@ fn main() {
 				}
 				Command::StartPlaying => {
 					ui_state.reset();
+
 					game_state.kind = GameStateKind::Playing;
 					image_effect = ImageEffect::None;
 					elapsed_time = 0.0;
@@ -716,19 +724,14 @@ fn main() {
 
 					//Reset UI state
 					ui_state.reset();
-					title_section_index = ui_state.add_section(title_section.clone());
-					ui_state.append_to_chain(main_menu_chain_index, main_menu_index);
+					
+					ui_state.display_screen(title_section.clone(), main_menu_index, main_chain_index);
 
-					image_effect = ImageEffect::None;
 					game_state.kind = GameStateKind::MainMenu;
-
-					//Stop the music
+					image_effect = ImageEffect::None;
 					if let Some(sink) = &bgm_sink {
 						sink.stop();
 					}
-				}
-				Command::ToggleMenu(index) => {
-					ui_state.toggle_menu(index);
 				}
 				Command::AppendToMenuChain(chain, dst) => {
 					ui_state.append_to_chain(chain, dst);
