@@ -107,12 +107,12 @@ impl InstancedMesh {
         }
     }
 
-    pub fn max_instances(&self) -> usize { self.max_instances }
-
-    pub unsafe fn render(&self) {
+    pub unsafe fn draw(&self) {
         gl::BindVertexArray(self.vao);
 		gl::DrawElementsInstanced(gl::TRIANGLES, self.index_count, gl::UNSIGNED_SHORT, ptr::null(), self.active_instances as GLint);
     }
+
+    pub fn max_instances(&self) -> usize { self.max_instances }
 
     pub fn update_buffer(&mut self, transforms: &[f32]) {
         //Record the current active instance count

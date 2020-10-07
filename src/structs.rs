@@ -24,7 +24,7 @@ impl<'a> Tank<'a> {
     pub const SHOT_COOLDOWN: f32 = 1.5;
     pub const HULL_INDEX: usize = 0;
     pub const TURRET_INDEX: usize = 1;
-    pub const HIT_SPHERE_RADIUS: f32 = 0.5;
+    pub const HIT_SPHERE_RADIUS: f32 = 0.4;
     
     pub fn new(position: glm::TVec3<f32>, forward: glm::TVec3<f32>, skeleton: &'a Skeleton, brain: Brain) -> Self {        
         Tank {
@@ -41,21 +41,6 @@ impl<'a> Tank<'a> {
             bone_transforms: vec![glm::identity(); skeleton.bones.len()]
         }
     }
-
-    pub fn aim_turret(&mut self, target: &glm::TVec4<f32>) {
-        //Point turret at target
-        let world_space_turret = self.bone_transforms[Self::HULL_INDEX] * self.skeleton.bone_origins[Self::TURRET_INDEX];
-        self.turret_forward = glm::normalize(&(target - world_space_turret));
-        self.bone_transforms[Self::TURRET_INDEX] = {
-            let new_x = -glm::cross(&glm::vec4_to_vec3(&-self.turret_forward), &glm::vec3(0.0, 1.0, 0.0));
-            self.bone_transforms[Self::HULL_INDEX] *
-            glm::mat4(new_x.x, 0.0, -self.turret_forward.x, 0.0,
-                    new_x.y, 1.0, -self.turret_forward.y, 0.0,
-                    new_x.z, 0.0, -self.turret_forward.z, 0.0,
-                    0.0, 0.0, 0.0, 1.0
-                    ) * glm::affine_inverse(self.rotation)
-        };
-    }
 }
 
 #[derive(Debug)]
@@ -69,6 +54,7 @@ pub struct Shell {
 impl Shell {
     pub const VELOCITY: f32 = 6.0;
     pub const LIFETIME: f32 = 4.0;
+    pub const HIT_SPHERE_RADIUS: f32 = 0.05;
 }
 
 //Determines what to do during the update step for a given entity
