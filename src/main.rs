@@ -298,7 +298,7 @@ fn main() {
 
 	//Load shell graphics
 	let shell_mesh = SimpleMesh::from_ozy("models/better_shell.ozy", &mut texture_keeper);
-	let mut shell_instanced_mesh = InstancedMesh::new(shell_mesh.vao, shell_mesh.index_count, 10000, 5);
+	let mut shell_instanced_mesh = InstancedMesh::new(shell_mesh.vao, shell_mesh.index_count, 1000, 5);
 
 	//Set up the light source
 	let sun_direction = glm::normalize(&glm::vec4(1.0, 1.0, -1.0, 0.0));
@@ -470,7 +470,7 @@ fn main() {
 
 	//Background music data
 	let bgm_path = "music/spirit_temple.mp3";
-	let bgm_volume = 0.5;
+	let bgm_volume = 0.25;
 	let bgm_sink = match rodio::default_output_device() {
 		Some(device) => {
 			let sink = Sink::new(&device);
@@ -523,12 +523,12 @@ fn main() {
 		GameState::new(GameStateKind::MainMenu, input_maps)
 	};
 
-	//Effect to use during the image effect step
+	//Effect to use during the postprocessing step
 	let mut image_effect = ImageEffect::None;
 
 	//Hit sphere visualization data
 	let mut draw_collision = false;
-	let mut sphere_volume_instanced_mesh = InstancedMesh::new(prims::sphere_vao(1.0, 12, 12), prims::sphere_index_count(12, 12) as GLint, 10000, 2);
+	let mut sphere_volume_instanced_mesh = InstancedMesh::new(prims::sphere_vao(1.0, 12, 12), prims::sphere_index_count(12, 12) as GLint, 1000, 2);
 
 	//Main loop
     while !window.should_close() {
@@ -651,8 +651,10 @@ fn main() {
 					}
 				}
 				Command::UnPauseGame => {
-					//Hide UI
-					ui_state.reset();
+					//Hide pause menu
+					ui_state.hide_menu(pause_menu_index);
+					ui_state.delete_section(title_section_index);
+
 					game_state.kind = GameStateKind::Playing;							
 					image_effect = ImageEffect::None;
 					if let Some(sink) = &bgm_sink {
@@ -709,6 +711,9 @@ fn main() {
 					tanks.clear();
 					shells.clear();
 
+					shell_instanced_mesh.update_buffer(&[]);
+					sphere_volume_instanced_mesh.update_buffer(&[]);
+
 					//Reset UI state
 					ui_state.reset();
 					title_section_index = ui_state.add_section(title_section.clone());
@@ -738,7 +743,8 @@ fn main() {
 		match game_state.kind {
 			GameStateKind::Playing => {
 				let floats_per_transform = 16;
-				let mut hit_transforms = Vec::with_capacity(tanks.count() + shells.count());
+				let buffer_size = (tanks.count() + shells.count()) * floats_per_transform;
+				let mut hit_instance_buffer = Vec::with_capacity(buffer_size);
 
 				elapsed_time += delta_time;
 				use_cached_3D_render = false;
@@ -791,7 +797,18 @@ fn main() {
 								tank.firing = true;
 							}
 						}
-						tank.aim_turret(&aim_target);
+						//Point turret at target
+						let world_space_turret = tank.bone_transforms[Tank::HULL_INDEX] * tank.skeleton.bone_origins[Tank::TURRET_INDEX];
+						tank.turret_forward = glm::normalize(&(aim_target - world_space_turret));
+						tank.bone_transforms[Tank::TURRET_INDEX] = {
+							let new_x = -glm::cross(&glm::vec4_to_vec3(&-tank.turret_forward), &glm::vec3(0.0, 1.0, 0.0));
+							tank.bone_transforms[Tank::HULL_INDEX] *
+							glm::mat4(new_x.x, 0.0, -tank.turret_forward.x, 0.0,
+									new_x.y, 1.0, -tank.turret_forward.y, 0.0,
+									new_x.z, 0.0, -tank.turret_forward.z, 0.0,
+									0.0, 0.0, 0.0, 1.0
+									) * glm::affine_inverse(tank.rotation)
+						};
 
 						//Fire a shell if the tank's firing flag is set and if the tank is not in cooldown
 						if tank.firing || mouse_rbutton_pressed {
@@ -822,7 +839,7 @@ fn main() {
 											glm::translation(&glm::vec4_to_vec3(&tank_skeleton.bone_origins[Tank::TURRET_INDEX])) *
 											routines::uniform_scale(Tank::HIT_SPHERE_RADIUS);
 						for i in 0..floats_per_transform {
-							hit_transforms.push(hit_transform[i]);
+							hit_instance_buffer.push(hit_transform[i]);
 						}
 					}
 				}
@@ -846,12 +863,12 @@ fn main() {
 						shell.transform[13] = shell.position.y;
 						shell.transform[14] = shell.position.z;
 
-						let hit_transform = shell.transform * glm::translation(&glm::vec4_to_vec3(&shell_mesh.origin)) * routines::uniform_scale(0.1);
+						let hit_transform = shell.transform * glm::translation(&glm::vec4_to_vec3(&shell_mesh.origin)) * routines::uniform_scale(Shell::HIT_SPHERE_RADIUS);
 
 						//Fill the transform buffer used for instanced rendering
 						for j in 0..floats_per_transform {
 							shell_transforms[current_shell * floats_per_transform + j] = shell.transform[j];
-							hit_transforms.push(hit_transform[j]);
+							hit_instance_buffer.push(hit_transform[j]);
 						}
 						current_shell += 1;
 					}
@@ -861,7 +878,7 @@ fn main() {
 				shell_instanced_mesh.update_buffer(&shell_transforms);
 
 				//Update GPU buffer storing hit volume transforms
-				sphere_volume_instanced_mesh.update_buffer(&hit_transforms);
+				sphere_volume_instanced_mesh.update_buffer(&hit_instance_buffer);
 			}
 			GameStateKind::MainMenu => { use_cached_3D_render = frame_count != snapshot_frame; }
 			GameStateKind::Paused => { use_cached_3D_render = frame_count != snapshot_frame; }
@@ -894,7 +911,6 @@ fn main() {
 				initialize_texture_samplers(gaussian_shader, &["image_texture"]);
 				initialize_texture_samplers(glyph_shader, &["glyph_texture"]);
 				glutil::bind_vector4(prim_instanced_shader, "color", &glm::vec4(0.0, 0.0, 1.0, 0.5));
-				glutil::bind_matrix4(prim_instanced_shader, "view_projection", &screen_state.clipping_from_world);
 
 				//-----------Shadow map rendering-----------
 
@@ -926,7 +942,7 @@ fn main() {
 
 				//Render shells
 				gl::UseProgram(shadow_shader_instanced);
-				shell_instanced_mesh.render();
+				shell_instanced_mesh.draw();
 
 				//-----------Main scene rendering-----------
 
@@ -972,22 +988,22 @@ fn main() {
 				//Render tank shells
 				gl::UseProgram(mapped_instanced_shader);
 
-				//Bind the texture maps
+				//Bind the shell's texture maps
 				for i in 0..shell_mesh.texture_maps.len() {
 					gl::ActiveTexture(gl::TEXTURE0 + i as GLenum);
 					gl::BindTexture(gl::TEXTURE_2D, shell_mesh.texture_maps[i]);
 				}
 
-				//Bind the vertex array
-				shell_instanced_mesh.render();
+				//Draw shells
+				shell_instanced_mesh.draw();
 
 				//Render collision volumes
 				#[cfg(dev_tools)]
 				{
 					if draw_collision {
 						gl::UseProgram(prim_instanced_shader);
-
-						sphere_volume_instanced_mesh.render();
+						glutil::bind_matrix4(prim_instanced_shader, "view_projection", &screen_state.clipping_from_world);
+						sphere_volume_instanced_mesh.draw();
 					}
 				}
 
