@@ -119,8 +119,7 @@ impl<'a> UIState<'a> {
     pub fn button_count(&self) -> usize { self.internals.buttons.count() }
 
 	pub fn create_menu_chain(&mut self) -> usize {
-		let mut chain = Vec::new();
-		self.menu_chains.push(chain);
+		self.menu_chains.push(Vec::new());
 		self.menu_chains.len() - 1
 	}
 

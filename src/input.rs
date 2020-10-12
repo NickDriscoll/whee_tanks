@@ -26,7 +26,8 @@ pub enum Command {
     ToggleCollisionVolumes,
     ToggleBlur,
     StartPlaying,
-    ReturnToMainMenu
+    ReturnToMainMenu,
+    SpawnEnemy
 }
 
 pub fn submit_input_command(input: &Input, command_buffer: &mut Vec<Command>, bindings: &HashMap<Input, Command>) {	

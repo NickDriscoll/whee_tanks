@@ -306,7 +306,7 @@ fn main() {
 	//Frame timing data
 	let mut last_frame_instant = Instant::now();
 	let mut frame_count = 0;
-	let mut snapshot_frame = 0;	//The frame on which the cached 3D render will be evicted
+	let mut snapshot_frame = 0;	//The frame on which the cached 3D render will be re-drawn
 	let mut elapsed_time = 0.0;	//This only increments when the game is actually playing
 
 	let mut is_wireframe = false;
@@ -460,7 +460,8 @@ fn main() {
 				vec![
 					("Toggle wireframe", Some(Command::ToggleWireframe)),
 					("Toggle blur", Some(Command::ToggleBlur)),
-					("Toggle collision volume rendering", Some(Command::ToggleCollisionVolumes))
+					("Toggle collision volume rendering", Some(Command::ToggleCollisionVolumes)),
+					("Reset scenario", None)
 				],
 				UIAnchor::LeftAligned((20.0, 20.0))
 			);
@@ -498,6 +499,7 @@ fn main() {
 			map.insert((InputKind::Key(Key::S), Action::Press), Command::MovePlayerTank(Tank::SPEED));
 			map.insert((InputKind::Key(Key::A), Action::Press), Command::RotatePlayerTank(-Tank::ROTATION_SPEED));
 			map.insert((InputKind::Key(Key::D), Action::Press), Command::RotatePlayerTank(Tank::ROTATION_SPEED));
+			map.insert((InputKind::Key(Key::Space), Action::Press), Command::SpawnEnemy);
 			map.insert((InputKind::Mouse(MouseButton::Button1), Action::Press), Command::Fire);
 			
 			#[cfg(dev_tools)]
@@ -673,6 +675,12 @@ fn main() {
 						tank.firing = true;
 					}
 				}
+				Command::SpawnEnemy => {
+					let tank_forward = glm::vec3(1.0, 0.0, 0.0);
+					let tank_position = glm::vec3(4.5, 0.0, 0.0);
+					let tank = Tank::new(tank_position, tank_forward, &tank_skeleton, Brain::DumbAI);
+					tanks.insert(tank);
+				}
 				Command::StartPlaying => {
 					ui_state.reset();
 
@@ -747,6 +755,7 @@ fn main() {
 			GameStateKind::Playing => {
 				let floats_per_transform = 16;
 				let buffer_size = (tanks.count() + shells.count()) * floats_per_transform;
+				let mut hit_spheres = Vec::with_capacity(tanks.count() + shells.count());
 				let mut hit_instance_buffer = Vec::with_capacity(buffer_size);
 
 				elapsed_time += delta_time;
@@ -760,8 +769,7 @@ fn main() {
 				//Update the tanks
 				for j in 0..tanks.len() {
 					if let Some(tank) = tanks.get_mut_element(j) {
-						//Check if tank collided with any shells
-						
+						let aim_target;
 
 						//Update the tank's forward vector
 						tank.forward = glm::vec4_to_vec3(&(glm::rotation(tank.rotating * delta_time, &glm::vec3(0.0, 1.0, 0.0)) * glm::vec3_to_vec4(&tank.forward)));
@@ -771,16 +779,16 @@ fn main() {
 
 						tank.rotation = {
 							let new_x = -glm::cross(&tank.forward, &glm::vec3(0.0, 1.0, 0.0));
-							glm::mat4(new_x.x, 0.0, tank.forward.x, 0.0,
-									new_x.y, 1.0, tank.forward.y, 0.0,
-									new_x.z, 0.0, tank.forward.z, 0.0,
-									0.0, 0.0, 0.0, 1.0
+							glm::mat4(
+								new_x.x, 0.0, tank.forward.x, 0.0,
+								new_x.y, 1.0, tank.forward.y, 0.0,
+								new_x.z, 0.0, tank.forward.z, 0.0,
+								0.0, 0.0, 0.0, 1.0
 							)
 						};
 
 						tank.bone_transforms[Tank::HULL_INDEX] = glm::translation(&tank.position) * tank.rotation;
 						
-						let aim_target;
 						match &mut tank.brain {
 							Brain::PlayerInput => {
 								//Simple ray-plane intersection.
@@ -800,7 +808,8 @@ fn main() {
 								tank.firing = true;
 							}
 						}
-						//Point turret at target
+
+						//Point turret at aim_target
 						let world_space_turret = tank.bone_transforms[Tank::HULL_INDEX] * tank.skeleton.bone_origins[Tank::TURRET_INDEX];
 						tank.turret_forward = glm::normalize(&(aim_target - world_space_turret));
 						tank.bone_transforms[Tank::TURRET_INDEX] = {
@@ -816,12 +825,16 @@ fn main() {
 						//Fire a shell if the tank's firing flag is set and if the tank is not in cooldown
 						if tank.firing || mouse_rbutton_pressed {
 							let timer_expired = elapsed_time > tank.last_shot_time + Tank::SHOT_COOLDOWN;			//Has this tank cooled down from its last shot?
-							let shell_buffer_has_room = shells.count() < shell_instanced_mesh.max_instances();		//Does the shell buffer have room?
+							let shell_buffer_has_room = shells.count() <= shell_instanced_mesh.max_instances();		//Does the shell buffer have room?
+							let not_at_max_shells = tank.live_shells < Tank::MAX_LIVE_SHELLS;
+							
+
+							let turbo = j == player_tank_id && mouse_rbutton_pressed && elapsed_time > tank.last_shot_time + Tank::SHOT_COOLDOWN;
 
 							//If all conditions are met, fire a shell
-							let turbo = j == player_tank_id && mouse_rbutton_pressed;
-							if (timer_expired || turbo) && shell_buffer_has_room {
+							if (timer_expired && not_at_max_shells || turbo) && shell_buffer_has_room {
 								tank.last_shot_time = elapsed_time;
+								tank.live_shells += 1;
 	
 								let transform = tank.bone_transforms[Tank::TURRET_INDEX];
 								let position = transform * glm::vec4(0.0, 0.0, 0.0, 1.0);
@@ -831,8 +844,9 @@ fn main() {
 									position,
 									velocity,
 									transform,
-									spawn_time: elapsed_time as f32
-								});								
+									spawn_time: elapsed_time as f32,
+									shooter: j
+								});
 							}
 							tank.firing = turbo;
 						}
@@ -844,6 +858,9 @@ fn main() {
 						for i in 0..floats_per_transform {
 							hit_instance_buffer.push(hit_transform[i]);
 						}
+
+						let hit_sphere = CollisionSphere::new(&hit_transform, Tank::HIT_SPHERE_RADIUS, CollisionEntity::Tank(j));
+						hit_spheres.push(hit_sphere);
 					}
 				}
 
@@ -854,6 +871,9 @@ fn main() {
 					if let Some(shell) = shells.get_mut_element(i) {
 						//Check if the shell needs to be de-spawned
 						if elapsed_time > shell.spawn_time + Shell::LIFETIME {
+							if let Some(tank) = tanks.get_mut_element(shell.shooter) {
+								tank.live_shells -= 1;
+							}
 							shells.delete(i);
 							continue;
 						}
@@ -873,7 +893,42 @@ fn main() {
 							shell_transforms[current_shell * floats_per_transform + j] = shell.transform[j];
 							hit_instance_buffer.push(hit_transform[j]);
 						}
+
+						let hit_sphere = CollisionSphere::new(&hit_transform, Shell::HIT_SPHERE_RADIUS, CollisionEntity::Shell(i));
+						hit_spheres.push(hit_sphere);
+
 						current_shell += 1;
+					}
+				}
+				
+				//Collision checking
+				for i in 0..hit_spheres.len() {
+					for j in i+1..hit_spheres.len() {
+						let pos1 = &hit_spheres[i].origin;
+						let pos2 = &hit_spheres[j].origin;
+						let radius1 = &hit_spheres[i].radius;
+						let radius2 = &hit_spheres[j].radius;
+
+						let colliding = glm::distance(&pos1, &pos2) <= radius1 + radius2;
+						if colliding {
+							//Handle each collision case
+							let indices = [i, j];
+							for k in 0..indices.len() {
+								match hit_spheres[indices[k]].target {
+									CollisionEntity::Tank(index) => {
+										match hit_spheres[indices[k ^ 1]].target {
+											CollisionEntity::Shell(_) => {
+												tanks.delete(index);
+											}
+											_ => {}
+										}
+									}
+									CollisionEntity::Shell(index) => {
+										shells.delete(index);
+									}
+								}
+							}
+						}
 					}
 				}
 

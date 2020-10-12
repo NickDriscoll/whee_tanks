@@ -8,6 +8,7 @@ pub struct Tank<'a> {
     pub position: glm::TVec3<f32>,
     pub speed: f32,
     pub last_shot_time: f32,
+    pub live_shells: usize,
     pub firing: bool,
     pub forward: glm::TVec3<f32>,
     pub rotating: f32,
@@ -21,16 +22,18 @@ pub struct Tank<'a> {
 impl<'a> Tank<'a> {
     pub const SPEED: f32 = 4.0;
     pub const ROTATION_SPEED: f32 = 3.141592654;
-    pub const SHOT_COOLDOWN: f32 = 1.5;
+    pub const SHOT_COOLDOWN: f32 = 0.05;
     pub const HULL_INDEX: usize = 0;
     pub const TURRET_INDEX: usize = 1;
     pub const HIT_SPHERE_RADIUS: f32 = 0.4;
+    pub const MAX_LIVE_SHELLS: usize = 5;
     
     pub fn new(position: glm::TVec3<f32>, forward: glm::TVec3<f32>, skeleton: &'a Skeleton, brain: Brain) -> Self {        
         Tank {
             position,
             speed: 0.0,
             last_shot_time: 0.0,
+            live_shells: 0,
             firing: false,
             forward,
             rotating: 0.0,
@@ -48,7 +51,8 @@ pub struct Shell {
     pub position: glm::TVec4<f32>,
     pub velocity: glm::TVec4<f32>,
     pub transform: glm::TMat4<f32>,
-    pub spawn_time: f32
+    pub spawn_time: f32,
+    pub shooter: usize
 }
 
 impl Shell {
@@ -146,6 +150,30 @@ impl ScreenState {
             clipping_from_world,
             world_from_clipping,
             clipping_from_screen
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum CollisionEntity {
+    Tank(usize),
+    Shell(usize)
+}
+
+#[derive(Debug)]
+pub struct CollisionSphere {
+    pub origin: glm::TVec4<f32>,
+    pub radius: f32,
+    pub target: CollisionEntity
+}
+
+impl CollisionSphere {
+    pub fn new(transform: &glm::TMat4<f32>, radius: f32, target: CollisionEntity) -> Self {
+        let origin = transform * glm::vec4(0.0, 0.0, 0.0, 1.0);
+        CollisionSphere {
+            origin,
+            radius,
+            target
         }
     }
 }
