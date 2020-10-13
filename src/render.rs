@@ -25,17 +25,6 @@ pub struct SimpleMesh {
 }
 
 impl SimpleMesh {
-    pub fn new(vao: GLuint, texture_maps: [GLuint; MAP_COUNT], in_count: usize) -> Self {
-        let index_count = in_count as GLint;
-        let origin = glm::zero();
-        SimpleMesh {
-            vao,
-            origin,
-            texture_maps,
-            index_count
-        }
-    }
-
     pub fn from_ozy(path: &str, texture_keeper: &mut TextureKeeper) -> Self {
         match routines::load_ozymesh(path) {
             Some(meshdata) => unsafe {
@@ -62,7 +51,7 @@ impl SimpleMesh {
 
 pub struct InstancedMesh {
     vao: GLuint,
-    transform_buffer: GLuint,    
+    transform_buffer: GLuint,
     index_count: GLint,
     active_instances: usize,
     max_instances: usize
