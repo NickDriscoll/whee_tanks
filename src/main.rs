@@ -297,7 +297,7 @@ fn main() {
 	let mut shells: OptionVec<Shell> = OptionVec::new();
 
 	//Load shell graphics
-	let shell_mesh = SimpleMesh::from_ozy("models/better_shell.ozy", &mut texture_keeper);
+	let shell_mesh = SimpleMesh::from_ozy("models/real_shell.ozy", &mut texture_keeper);
 	let mut shell_instanced_mesh = InstancedMesh::new(shell_mesh.vao, shell_mesh.index_count, 1000, 5);
 
 	//Set up the light source
@@ -826,8 +826,7 @@ fn main() {
 						if tank.firing || mouse_rbutton_pressed {
 							let timer_expired = elapsed_time > tank.last_shot_time + Tank::SHOT_COOLDOWN;			//Has this tank cooled down from its last shot?
 							let shell_buffer_has_room = shells.count() <= shell_instanced_mesh.max_instances();		//Does the shell buffer have room?
-							let not_at_max_shells = tank.live_shells < Tank::MAX_LIVE_SHELLS;
-							
+							let not_at_max_shells = tank.live_shells < Tank::MAX_LIVE_SHELLS;							
 
 							let turbo = j == player_tank_id && mouse_rbutton_pressed && elapsed_time > tank.last_shot_time + Tank::SHOT_COOLDOWN;
 
@@ -924,7 +923,12 @@ fn main() {
 										}
 									}
 									CollisionEntity::Shell(index) => {
-										shells.delete(index);
+										if let Some(shell) = &shells[index] {											
+											if let Some(tank) = tanks.get_mut_element(shell.shooter) {
+												tank.live_shells -= 1;
+											}
+											shells.delete(index);
+										}
 									}
 								}
 							}
