@@ -56,9 +56,45 @@ fn glyph_vertex_transform(vertex: GlyphVertex) -> GlyphBrushVertexType {
 //Subset of UIState created to fix some borrowing issues
 pub struct UIInternals<'a> {
     vao_flag: bool,
-    pub glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>,
+	pub glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>,
+	window_size: (u32, u32),
     buttons: OptionVec<UIButton>,
     sections: OptionVec<Section<'a>>
+}
+
+impl<'a> UIInternals<'a> {
+    pub fn new(glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>, window_size: (u32, u32)) -> Self {
+        UIInternals {
+            vao_flag: false,
+			glyph_brush,
+			window_size,
+            buttons: OptionVec::new(),
+            sections: OptionVec::new()
+        }
+    }
+
+    pub fn add_button(&mut self, button: UIButton) -> usize {
+        self.vao_flag = true;
+        self.buttons.insert(button)
+    }
+
+    pub fn add_section(&mut self, section: Section<'a>) -> usize {
+        self.vao_flag = true;
+        self.sections.insert(section)
+    }
+
+    pub fn delete_button(&mut self, index: usize) {
+        self.vao_flag = true;
+        if let Some(button) = &self.buttons[index] {
+            self.sections.delete(button.section_id());
+            self.buttons.delete(index);
+        }
+    }
+
+    pub fn delete_section(&mut self, index: usize) {
+        self.vao_flag = true;
+        self.sections.delete(index);
+    }
 }
 
 pub struct UIState<'a> {
@@ -76,7 +112,7 @@ impl<'a> UIState<'a> {
     pub const FLOATS_PER_COLOR: usize = 4;
     pub const COLORS_PER_BUTTON: usize = 4;
 
-    pub fn new(glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>) -> Self {
+    pub fn new(glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>, window_size: (u32, u32)) -> Self {
         //Create the glyph texture
         let glyph_texture = unsafe {
             let (width, height) = glyph_brush.texture_dimensions();
@@ -95,7 +131,7 @@ impl<'a> UIState<'a> {
         UIState {
             button_color_buffer: 0,
             buttons_vao: None,
-            internals: UIInternals::new(glyph_brush),
+            internals: UIInternals::new(glyph_brush, window_size),
             glyph_texture,
             glyph_vao: None,
 			glyph_count: 0,
@@ -125,7 +161,17 @@ impl<'a> UIState<'a> {
 
 	pub fn delete_section(&mut self, index: usize) { self.internals.delete_section(index); }
 
-	pub fn display_screen(&mut self, section: Section<'a>, menu: usize, chain: usize) -> usize {		
+	pub fn display_screen(&mut self, sections: &Vec<Section<'a>>, menu: usize, chain: usize) -> Vec<usize> {
+		let mut indices = vec![0; sections.len()];
+
+		self.append_to_chain(chain, menu);
+		for i in 0..sections.len() {
+			indices[i] = self.add_section(sections[i].clone());
+		}
+		indices
+	}
+
+	pub fn display_titled_menu(&mut self, section: Section<'a>, menu: usize, chain: usize) -> usize {
 		self.append_to_chain(chain, menu);
 		self.add_section(section)
 	}
@@ -155,6 +201,16 @@ impl<'a> UIState<'a> {
 			chain.clear();
 		}
     }
+	
+	pub fn resize(&mut self, new_screen_size: (u32, u32)) {
+		self.internals.window_size = new_screen_size;
+		for menu in self.menus.iter_mut() {
+			if menu.active {
+				menu.toggle(&mut self.internals);
+				menu.toggle(&mut self.internals);
+			}
+		}
+	}
 	
 	pub fn rollback_chain(&mut self, chain: usize) {
 		if let Some(index) = self.menu_chains[chain].pop() {
@@ -232,22 +288,6 @@ impl<'a> UIState<'a> {
 					}
 				}				
 				current_button += 1;
-			}
-		}
-	}
-	
-	pub fn update_screen_size(&mut self, size: (u32, u32)) {
-		for menu in self.menus.iter_mut() {
-			match menu.anchor {
-				UIAnchor::DeadCenter(_) => {
-					let ugh = (size.0 as f32, size.1 as f32);
-					menu.anchor = UIAnchor::DeadCenter(ugh);
-					if menu.active {
-						menu.toggle(&mut self.internals);
-						menu.toggle(&mut self.internals);
-					}
-				}
-				_ => {}
 			}
 		}
 	}
@@ -413,40 +453,6 @@ impl<'a> UIState<'a> {
     }
 }
 
-impl<'a> UIInternals<'a> {
-    pub fn new(glyph_brush: &'a mut GlyphBrush<GlyphBrushVertexType>) -> Self {
-        UIInternals {
-            vao_flag: false,
-            glyph_brush,
-            buttons: OptionVec::new(),
-            sections: OptionVec::new()
-        }
-    }
-
-    pub fn add_button(&mut self, button: UIButton) -> usize {
-        self.vao_flag = true;
-        self.buttons.insert(button)
-    }
-
-    pub fn add_section(&mut self, section: Section<'a>) -> usize {
-        self.vao_flag = true;
-        self.sections.insert(section)
-    }
-
-    pub fn delete_button(&mut self, index: usize) {
-        self.vao_flag = true;
-        if let Some(button) = &self.buttons[index] {
-            self.sections.delete(button.section_id());
-            self.buttons.delete(index);
-        }
-    }
-
-    pub fn delete_section(&mut self, index: usize) {
-        self.vao_flag = true;
-        self.sections.delete(index);
-    }
-}
-
 #[derive(Debug)]
 pub struct UIButton {
     pub bounds: glyph_brush::Rectangle<f32>,
@@ -482,6 +488,8 @@ impl<'a> Menu<'a> {
 		let size = buttons.len();
 		let mut button_labels = Vec::with_capacity(size);
 		let mut button_commands = Vec::with_capacity(size);
+
+		//lol
 		for butt in buttons.iter() {
 			button_labels.push(butt.0);
 			button_commands.push(butt.1);
@@ -553,16 +561,22 @@ impl<'a> Menu<'a> {
                         max: [x_pos + width, y_pos + height]
                     }
                 }
-                UIAnchor::DeadCenter(window_size) => {
+                UIAnchor::DeadCenter => {
 					let total_menu_height = (height + BUFFER_DISTANCE) * self.button_labels.len() as f32 - BUFFER_DISTANCE;
 
-					let x_pos = (window_size.0 - width) / 2.0;
-					let y_pos = (window_size.1 - total_menu_height) / 2.0 + i as f32 * (height + BUFFER_DISTANCE);
+					let x_pos = (ui_internals.window_size.0 as f32 - width) / 2.0;
+					let y_pos = (ui_internals.window_size.1 as f32 - total_menu_height) / 2.0 + i as f32 * (height + BUFFER_DISTANCE);
                     glyph_brush::Rectangle {
                         min: [x_pos, y_pos],
                         max: [x_pos + width, y_pos + height]
                     }
-                }
+				}
+				UIAnchor::CenterTop => {
+					glyph_brush::Rectangle {
+                        min: [0.0, 0.0],
+                        max: [0.0 + 0.0, 0.0 + 0.0]
+                    }
+				}
             };
 					
 		    section.screen_position = (
@@ -600,7 +614,8 @@ impl<'a> Menu<'a> {
 //Defines the anchor point of the UI element and how that anchor is configured
 pub enum UIAnchor {
     LeftAligned((f32, f32)),			//Parameter is the screen-space position of the top-left corner of the entire menu's bounding box
-    DeadCenter((f32, f32))				//Parameter is the screen size in pixels
+	DeadCenter,
+	CenterTop
 }
 
 #[derive(PartialEq, Eq, Debug)]

@@ -77,7 +77,7 @@ extern "system" fn gl_debug_callback(source: GLenum, gltype: GLenum, id: GLuint,
 		}
 		gl::DEBUG_SEVERITY_MEDIUM => { 
 			println!("Severity: Medium"); 
-	}
+		}
 		gl::DEBUG_SEVERITY_LOW => { 
 			println!("Severity: Low"); 
 		}
@@ -117,7 +117,7 @@ fn main() {
 	let world_from_view = glm::affine_inverse(view_from_world);
 	let world_space_look_direction = world_from_view * glm::vec4(0.0, 0.0, 1.0, 0.0);
 
-	//Variables that depend on screen size
+	//Window resolution
 	const WINDOWED_SIZE: (u32, u32) = (1920, 1080);
 
 	//Init glfw
@@ -126,11 +126,12 @@ fn main() {
 		Err(e) => {	panic!("GLFW init error: {}", e); }
 	};
 
+	//Ask for an OpenGL 4.3 core context
 	glfw.window_hint(glfw::WindowHint::ContextVersion(4, 3));
 	glfw.window_hint(glfw::WindowHint::OpenGlProfile(glfw::OpenGlProfileHint::Core));
 
 	#[cfg(gloutput)]
-	glfw.window_hint(glfw::WindowHint::OpenGlDebugContext(true));
+	glfw.window_hint(glfw::WindowHint::OpenGlDebugContext(true));			//Debug context if we've compiled with renderer debugging
 
 	//Create window
     let (mut window, events) = glfw.create_window(WINDOWED_SIZE.0, WINDOWED_SIZE.1, game_title, WindowMode::Windowed).unwrap();
@@ -169,7 +170,7 @@ fn main() {
 		}
 	}
 
-	//Screen filling triangle with uvs chosen such that the sampled image exactly covers the screen
+	//Screen filling triangle with uvs chosen such that the uv range [0, 1] exactly covers the screen
 	let postprocessing_vao = unsafe {
 		let vs = [
 			-1.0, -1.0, 0.0, 0.0,
@@ -366,8 +367,9 @@ fn main() {
 										0.0, 0.0, 1.0, 0.0,
 										0.0, 0.0, 0.0, 1.0) * glm::look_at(&glm::vec4_to_vec3(&(sun_direction * 4.0)), &glm::zero(), &glm::vec3(0.0, 1.0, 0.0));
 
-	
-										let font = match FontArc::try_from_slice(include_bytes!("../fonts/Constantia.ttf")) {
+
+	//Load font used for text rendering
+	let font = match FontArc::try_from_slice(include_bytes!("../fonts/Constantia.ttf")) {
 		Ok(s) => { s }
 		Err(e) => { panic!("{}", e) }
 	};
@@ -382,11 +384,13 @@ fn main() {
 	let mut last_mouse_lbutton_pressed = false;
 
 	//Title text
+	let title_font_size = 72.0;
+	let title_color = [1.0, 1.0, 1.0, 1.0];
+
 	let mut title_section = {
-		let font_size = 72.0;
 		let section = Section::new();
-		let mut text = Text::new(game_title).with_color([1.0, 1.0, 1.0, 1.0]);
-		text.scale = PxScale::from(font_size);
+		let mut text = Text::new(game_title).with_color(title_color);
+		text.scale = PxScale::from(title_font_size);
 		let mut section = section.add_text(text);
 	
 		let bounding_box = glyph_brush.glyph_bounds(&section).unwrap();
@@ -411,7 +415,7 @@ fn main() {
 
 	//Data structure of all UI state
 	let mut ui_state = {
-		let mut state = UIState::new(&mut glyph_brush);
+		let mut state = UIState::new(&mut glyph_brush, screen_state.window_size);
 		main_chain_index = state.create_menu_chain();
 		dev_chain_index = state.create_menu_chain();
 
@@ -427,7 +431,7 @@ fn main() {
 				("Settings", Some(Command::AppendToMenuChain(main_chain_index, settings_menu_index))),
 				("Exit", Some(Command::Quit)),
 			],
-			UIAnchor::DeadCenter(float_window_size)
+			UIAnchor::DeadCenter
 		);
 		menus.push(menu);
 
@@ -439,7 +443,7 @@ fn main() {
 				("Main Menu", Some(Command::ReturnToMainMenu)),
 				("Exit", Some(Command::Quit)),
 			],
-			UIAnchor::DeadCenter(float_window_size)
+			UIAnchor::DeadCenter
 		);
 		menus.push(menu);
 
@@ -449,7 +453,7 @@ fn main() {
 				("Toggle fullscreen", Some(Command::ToggleFullScreen)),
 				("Back", Some(Command::MenuChainRollback(main_chain_index))),
 			],
-			UIAnchor::DeadCenter(float_window_size)
+			UIAnchor::DeadCenter
 		);
 		menus.push(menu);
 
@@ -473,7 +477,7 @@ fn main() {
 
 		state
 	};	
-	let mut title_section_index = ui_state.display_screen(title_section.clone(), main_menu_index, main_chain_index);
+	let mut title_section_index = ui_state.display_titled_menu(title_section.clone(), main_menu_index, main_chain_index);
 
 	//Background music data
 	let bgm_path = "music/dark_ruins.mp3";
@@ -620,7 +624,7 @@ fn main() {
 					is_fullscreen = !is_fullscreen;
 
 					//Update the UI elements that depend on screen size
-					ui_state.update_screen_size(screen_state.window_size);
+					ui_state.resize(screen_state.window_size);
 					let bounding_box = ui_state.internals.glyph_brush.glyph_bounds(&title_section).unwrap();
 					title_section.screen_position = (
 						screen_state.window_size.0 as f32 / 2.0 - bounding_box.width() / 2.0,
@@ -652,7 +656,7 @@ fn main() {
 					}
 					
 					//Enable the pause menu
-					title_section_index = ui_state.display_screen(title_section.clone(), pause_menu_index, main_chain_index);
+					title_section_index = ui_state.display_titled_menu(title_section.clone(), pause_menu_index, main_chain_index);
 	
 					game_state.kind = GameStateKind::Paused;
 					image_effect = ImageEffect::Blur;
@@ -733,7 +737,7 @@ fn main() {
 					//Reset UI state
 					ui_state.reset();
 					
-					ui_state.display_screen(title_section.clone(), main_menu_index, main_chain_index);
+					ui_state.display_titled_menu(title_section.clone(), main_menu_index, main_chain_index);
 
 					game_state.kind = GameStateKind::MainMenu;
 					image_effect = ImageEffect::None;
@@ -761,10 +765,14 @@ fn main() {
 				elapsed_time += delta_time;
 				use_cached_3D_render = false;
 
-				let mut player_origin = glm::vec4(0.0, 0.0, 0.0, 1.0);
-				if let Some(tank) = &tanks[player_tank_id] {
-					player_origin = tank.bone_transforms[Tank::HULL_INDEX] * tank_skeleton.bone_origins[Tank::TURRET_INDEX];
-				}
+				let player_origin = match &tanks[player_tank_id] {
+					Some(tank) => {
+						tank.bone_transforms[Tank::HULL_INDEX] * tank_skeleton.bone_origins[Tank::TURRET_INDEX]
+					}
+					None => {
+						glm::vec4(0.0, 0.0, 0.0, 1.0)
+					}
+				};
 
 				//Update the tanks
 				for j in 0..tanks.len() {
