@@ -105,7 +105,8 @@ pub struct UIState<'a> {
     pub glyph_vao: Option<GLuint>,
 	pub glyph_count: usize,
 	menu_chains: Vec<Vec<usize>>, //Array of array of menu ids used for nested menu traversal
-    menus: Vec<Menu<'a>>
+	menus: Vec<Menu<'a>>,
+	text_elements: Vec<UIText<'a>>
 }
 
 impl<'a> UIState<'a> {
@@ -136,11 +137,12 @@ impl<'a> UIState<'a> {
             glyph_vao: None,
 			glyph_count: 0,
 			menu_chains: Vec::new(),
-            menus: Vec::new()
+			menus: Vec::new(),
+			text_elements: Vec::new()
         }
     }
     
-    pub fn add_section(&mut self, section: Section<'a>) -> usize { self.internals.add_section(section) } //Adds a standalone section to the UI
+	pub fn add_section(&mut self, section: Section<'a>) -> usize { self.internals.add_section(section) } //Adds a standalone section to the UI
 	
 	pub fn append_to_chain(&mut self, chain: usize, dst: usize) {
 		//We only need to hide the current menu if there are more than zero menus in the chain
@@ -192,7 +194,12 @@ impl<'a> UIState<'a> {
     //Clears the data in self.internals and marks all menus as inactive
     pub fn reset(&mut self) {
         self.internals.buttons.clear();
-        self.internals.sections.clear();
+		self.internals.sections.clear();
+		
+		for text in self.text_elements.iter_mut() {
+			text.active = false;
+		}
+
         for menu in self.menus.iter_mut() {
 			menu.active = false;
 		}
@@ -210,6 +217,13 @@ impl<'a> UIState<'a> {
 				menu.toggle(&mut self.internals);
 			}
 		}
+
+		for text_element in self.text_elements.iter_mut() {
+			if text_element.active {
+				text_element.toggle(&mut self.internals);
+				text_element.toggle(&mut self.internals);
+			}
+		}
 	}
 	
 	pub fn rollback_chain(&mut self, chain: usize) {
@@ -225,6 +239,10 @@ impl<'a> UIState<'a> {
 
 	pub fn set_menus(&mut self, menus: Vec<Menu<'a>>) {
 		self.menus = menus;
+	}
+
+	pub fn set_text_elements(&mut self, texts: Vec<UIText<'a>>) {
+		self.text_elements = texts;
 	}
 
 	fn show_menu(&mut self, index: usize) { self.menus[index].show(&mut self.internals); }
@@ -247,6 +265,10 @@ impl<'a> UIState<'a> {
 		} else {
 			self.append_to_chain(chain, menu);
 		}
+	}
+
+	pub fn toggle_text_element(&mut self, index: usize) {
+		self.text_elements[index].toggle(&mut self.internals);
 	}
 
     //Gets input from the UI system and generates Commands for the command buffer I.E. user clicking on buttons
@@ -453,6 +475,85 @@ impl<'a> UIState<'a> {
     }
 }
 
+pub struct UIText<'a> {
+	text: &'a str,
+	font_size: f32,
+	color: [f32; 4],
+	anchor: UIAnchor,
+	active: bool,
+	index: Option<usize>
+}
+
+impl<'a> UIText<'a> {
+	pub fn new(text: &'a str, font_size: f32, anchor: UIAnchor) -> Self {
+		UIText {
+			text,
+			font_size,
+			color: [1.0, 1.0, 1.0, 1.0],
+			anchor,
+			active: false,
+			index: None
+		}
+	}
+
+	pub fn show(&mut self, internals: &mut UIInternals<'a>) {
+		if self.active { return; }
+		self.active = true;
+
+		//Create the section
+		let the_section = {
+			let section = Section::new();
+			let mut text = Text::new(self.text).with_color(self.color);
+			text.scale = PxScale::from(self.font_size);
+			let mut section = section.add_text(text);
+		
+			let bounding_box = match internals.glyph_brush.glyph_bounds(&section) {
+				Some(bb) => { bb }
+				None => {
+					panic!("Can't compute a bounding box for {}", self.text);
+				}
+			};
+
+			section.screen_position = match self.anchor {
+                UIAnchor::LeftAligned(pos) => { pos }
+                UIAnchor::DeadCenter => {
+					let x_pos = (internals.window_size.0 as f32 - bounding_box.width()) / 2.0;
+					let y_pos = (internals.window_size.1 as f32 - bounding_box.height()) / 2.0;
+					
+					(x_pos, y_pos)
+				}
+				UIAnchor::CenterTop(offset) => {
+					let x_pos = (internals.window_size.0 as f32 - bounding_box.width()) / 2.0;
+
+					(x_pos, offset)
+				}
+			};
+			
+			section
+		};
+
+		self.index = Some(internals.sections.insert(the_section));
+	}
+
+	pub fn hide(&mut self, internals: &mut UIInternals) {
+		if !self.active { return; }
+		self.active = false;
+
+		if let Some(i) = self.index {
+			internals.delete_section(i);
+		}
+	}
+
+	pub fn toggle(&mut self, internals: &mut UIInternals<'a>) {
+		if self.active {
+			self.hide(internals);
+		} else {
+			self.show(internals);
+		}
+	}
+}
+
+//Free floating button element
 #[derive(Debug)]
 pub struct UIButton {
     pub bounds: glyph_brush::Rectangle<f32>,
@@ -571,10 +672,12 @@ impl<'a> Menu<'a> {
                         max: [x_pos + width, y_pos + height]
                     }
 				}
-				UIAnchor::CenterTop => {
-					glyph_brush::Rectangle {
-                        min: [0.0, 0.0],
-                        max: [0.0 + 0.0, 0.0 + 0.0]
+				UIAnchor::CenterTop(offset) => {
+					let x_pos = (ui_internals.window_size.0 as f32 - width) / 2.0;
+					let y_pos = offset + i as f32 * (height + BUFFER_DISTANCE);
+                    glyph_brush::Rectangle {
+                        min: [x_pos, y_pos],
+                        max: [x_pos + width, y_pos + height]
                     }
 				}
             };
@@ -615,7 +718,7 @@ impl<'a> Menu<'a> {
 pub enum UIAnchor {
     LeftAligned((f32, f32)),			//Parameter is the screen-space position of the top-left corner of the entire menu's bounding box
 	DeadCenter,
-	CenterTop
+	CenterTop(f32)						//Parameter is the offset from the top in pixels
 }
 
 #[derive(PartialEq, Eq, Debug)]

@@ -14,7 +14,7 @@ use ozy_engine::{glutil, prims, routines};
 use ozy_engine::structs::OptionVec;
 use crate::structs::*;
 use crate::input::{Command, InputKind, {submit_input_command}};
-use crate::ui::{Menu, UIAnchor, UIState};
+use crate::ui::{Menu, UIAnchor, UIState, UIText};
 use crate::render::{Bone, Framebuffer, InstancedMesh, RenderTarget, SimpleMesh, Skeleton, StaticGeometry, TextureKeeper};
 
 mod input;
@@ -383,28 +383,13 @@ fn main() {
 	let mut mouse_rbutton_pressed = false;
 	let mut last_mouse_lbutton_pressed = false;
 
-	//Title text
-	let title_font_size = 72.0;
-	let title_color = [1.0, 1.0, 1.0, 1.0];
-
-	let mut title_section = {
-		let section = Section::new();
-		let mut text = Text::new(game_title).with_color(title_color);
-		text.scale = PxScale::from(title_font_size);
-		let mut section = section.add_text(text);
-	
-		let bounding_box = glyph_brush.glyph_bounds(&section).unwrap();
-		section.screen_position = (
-			screen_state.window_size.0 as f32 / 2.0 - bounding_box.width() / 2.0,
-			40.0
-		);
-		section
-	};
-
 	//Hardcoded menu indices
 	let main_menu_index = 0;
 	let pause_menu_index = 1;
 	let settings_menu_index = 2;
+
+	//Hardcoded text indices
+	let title_text_index = 0;
 
 	#[cfg(dev_tools)]
 	let dev_menu_index = 3;
@@ -472,14 +457,19 @@ fn main() {
 			menus.push(menu);
 		}
 
+		//Title text
+		let title_text = UIText::new(game_title, 72.0, UIAnchor::CenterTop(40.0));
+		state.set_text_elements(vec![title_text]);
+
 		//Set the ui_state to use these menus
 		state.set_menus(menus);
 
+		state.append_to_chain(main_chain_index, main_menu_index);
+		state.toggle_text_element(title_text_index);
 		state
-	};	
-	let mut title_section_index = ui_state.display_titled_menu(title_section.clone(), main_menu_index, main_chain_index);
+	};
 
-	//Background music data
+	//Background music
 	let bgm_path = "music/dark_ruins.mp3";
 	let bgm_volume = 0.25;
 	let bgm_sink = match rodio::default_output_device() {
@@ -625,13 +615,6 @@ fn main() {
 
 					//Update the UI elements that depend on screen size
 					ui_state.resize(screen_state.window_size);
-					let bounding_box = ui_state.internals.glyph_brush.glyph_bounds(&title_section).unwrap();
-					title_section.screen_position = (
-						screen_state.window_size.0 as f32 / 2.0 - bounding_box.width() / 2.0,
-						40.0
-					);
-					ui_state.delete_section(title_section_index);
-					title_section_index = ui_state.add_section(title_section.clone());
 				}
 				Command::ToggleMenu(chain, menu) => {
 					ui_state.toggle_menu(chain, menu);
@@ -656,7 +639,8 @@ fn main() {
 					}
 					
 					//Enable the pause menu
-					title_section_index = ui_state.display_titled_menu(title_section.clone(), pause_menu_index, main_chain_index);
+					ui_state.toggle_text_element(title_text_index);
+					ui_state.toggle_menu(main_chain_index, pause_menu_index);
 	
 					game_state.kind = GameStateKind::Paused;
 					image_effect = ImageEffect::Blur;
@@ -666,7 +650,8 @@ fn main() {
 				}
 				Command::UnPauseGame => {
 					//Hide pause menu
-					ui_state.hide_screen(title_section_index, main_chain_index);
+					ui_state.toggle_text_element(title_text_index);
+					ui_state.toggle_menu(main_chain_index, pause_menu_index);
 
 					game_state.kind = GameStateKind::Playing;							
 					image_effect = ImageEffect::None;
@@ -736,8 +721,8 @@ fn main() {
 
 					//Reset UI state
 					ui_state.reset();
-					
-					ui_state.display_titled_menu(title_section.clone(), main_menu_index, main_chain_index);
+					ui_state.toggle_text_element(title_text_index);
+					ui_state.toggle_menu(main_chain_index, main_menu_index);
 
 					game_state.kind = GameStateKind::MainMenu;
 					image_effect = ImageEffect::None;
